@@ -1,8 +1,9 @@
-"""Failure classification for yt-dlp output lines.
+"""Failure classification for yt-dlp and nndownload output lines.
 
-Provides :func:`classify_line` which inspects a single line of yt-dlp stdout/stderr
-and returns ``(video_id_or_none, kind_or_none)`` where *kind* is ``'permanent'`` or
-``'transient'``.
+Provides:
+- :func:`classify_line` — yt-dlp ERROR line parser.
+- :func:`parse_result_line` — nndownload ``[result] ...`` line parser.
+- :func:`classify_nndownload_failure` — map nndownload error text to failure kind.
 """
 from __future__ import annotations
 
@@ -69,3 +70,65 @@ def classify_line(line: str) -> Classification:
             return Classification(video_id=video_id, kind=kind)
 
     return Classification(video_id=None, kind=None)
+
+
+# ---------------------------------------------------------------------------
+# nndownload result-line support
+# ---------------------------------------------------------------------------
+
+# Pattern for nndownload structured result lines:
+#   [result] ok <id>
+#   [result] skip <id> archived|exists
+#   [result] fail <id> ExceptionClass: message
+_RESULT_LINE = re.compile(
+    r"^\[result\]\s+(ok|skip|fail)\s+(\S+)(?:\s+(.*))?$"
+)
+
+# nndownload failure patterns → kind.
+# Permanent: deleted/private video, premium-only format, region block.
+# Transient: network errors, site-change breakage, auth/session issues.
+NNDOWNLOAD_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # Permanent
+    (re.compile(r"deleted|removed|not found", re.IGNORECASE), "permanent"),
+    (re.compile(r"private", re.IGNORECASE), "permanent"),
+    (re.compile(r"FormatNotAvailableException.*(?:premium|paid)", re.IGNORECASE), "permanent"),
+    (re.compile(r"FormatNotAvailableException.*economy", re.IGNORECASE), "permanent"),
+    (re.compile(r"region", re.IGNORECASE), "permanent"),
+    # Transient
+    (re.compile(r"HTTP [45]\d\d", re.IGNORECASE), "transient"),
+    (re.compile(r"timed? ?out", re.IGNORECASE), "transient"),
+    (re.compile(r"ParameterExtractionException", re.IGNORECASE), "transient"),
+    (re.compile(r"authentication|session.?invalid|session.?expired|login", re.IGNORECASE), "transient"),
+    (re.compile(r"connection reset|connection error", re.IGNORECASE), "transient"),
+]
+
+
+def parse_result_line(line: str) -> tuple[str, str, str | None] | None:
+    """Parse an nndownload ``[result] ...`` line.
+
+    Returns ``(status, video_id, detail)`` where *status* is one of
+    ``'ok'``, ``'skip'``, ``'fail'``, *video_id* is the video identifier,
+    and *detail* is the rest of the line (or *None*).
+
+    Returns *None* for lines that don't match the pattern.
+    """
+    m = _RESULT_LINE.match(line.strip())
+    if m is None:
+        return None
+    status = m.group(1)
+    video_id = m.group(2)
+    detail = m.group(3) or None
+    return status, video_id, detail
+
+
+def classify_nndownload_failure(detail: str | None) -> str:
+    """Classify an nndownload failure detail string as ``'permanent'`` or ``'transient'``.
+
+    Returns ``'transient'`` by default when no pattern matches.
+    """
+    if detail is None:
+        return "transient"
+    for pattern, kind in NNDOWNLOAD_PATTERNS:
+        if pattern.search(detail):
+            return kind
+    return "transient"

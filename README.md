@@ -115,6 +115,83 @@ kura uses per-source advisory file locks (`<state_dir>/locks/<name>.lock`) so th
 - `kura run NAME` prints a skip message and exits 0 (an overlapping timer tick is normal).
 - `kura import NAME` prints a skip message and exits 1 (a run/import collision warrants user attention).
 
+## Niconico (nndownload)
+
+kura can archive Niconico playlists, user channels, and series using [nndownload](https://github.com/niconico/nndownload) as the downloader backend.
+
+### Prerequisites
+
+Install the patched nndownload build (the patch adds `--download-archive` support required by kura):
+
+```sh
+uv tool install --force --from git+https://github.com/shovel-kun/nndownload nndownload
+```
+
+Verify with `kura doctor` — it checks that `--download-archive` appears in `nndownload --help`.
+
+### Adding a Niconico source
+
+```sh
+kura add nico-mylist https://www.nicovideo.jp/mylist/12345678 \
+  --dir /archive/niconico \
+  --downloader nndownload \
+  --auth "--session-cookie ~/.config/kura/nicovideo_session.txt" \
+  --profile niconico-archive \
+  --strategy full
+```
+
+The `--auth` value is passed verbatim to nndownload before its URL argument.  Common auth options:
+
+| Option | When to use |
+|--------|-------------|
+| `--session-cookie /path/to/file` | Production use: paste the `user_session` cookie value into a file (`chmod 600`) |
+| `-g` | Interactive login prompt (not suitable for automated runs) |
+| `-n` | No login (public content only) |
+
+### Session-cookie refresh
+
+When `kura status` shows a cluster of transient auth failures (e.g. "authentication failed", "session expired"), the session cookie has expired.  To refresh:
+
+1. Log into nicovideo.jp in your browser.
+2. Use a cookie inspector (e.g. browser DevTools → Application → Cookies) to copy the value of `user_session`.
+3. Paste the raw cookie value into the session-cookie file (overwrite the entire file — no key name, just the value).
+4. Nothing else needs to change; the next `kura run` will pick it up automatically.
+
+### Strategies
+
+nndownload sources support `full` and `quick` strategies only (`rss` is not available):
+
+| Strategy | Behaviour |
+|----------|-----------|
+| `full` | Downloads all items in the playlist/channel that are not already archived. Safe for all URL types. |
+| `quick` | Passes `--break-on-existing` to nndownload — stops at the first already-archived item, so it only processes recent additions. Efficient for large lists where new content is always at the top. |
+
+Use `full_reindex_every` to periodically promote `quick` runs to `full` (default `7d`), catching any gaps.
+
+### Comments
+
+When `--download-comments` is present in the `.nnconf` profile, nndownload writes a `{stem}.comments.json` alongside each video.  kura treats these as opaque data and never parses them as archive evidence.
+
+### Importing an existing nndownload directory
+
+If you have already downloaded videos with nndownload before adding the source to kura, run:
+
+```sh
+kura import nico-mylist
+```
+
+kura scans the output directory for nndownload metadata sidecars (`*.json`, excluding `*.info.json` and `*.comments.json`), extracts the video ID from each, and appends any missing `niconico <id>` entries to `archive.txt`.  yt-dlp `.info.json` sidecars in the same tree are also recognised, so mixed directories import correctly.  Pass `--dry-run` to preview without writing.
+
+### suppress for Niconico sources
+
+`kura suppress` automatically uses `niconico` as the extractor default when the source uses nndownload, so you do not need to pass `--extractor` manually:
+
+```sh
+kura suppress nico-mylist sm12345
+# equivalent to:
+kura suppress nico-mylist sm12345 --extractor niconico
+```
+
 ## Scheduling
 
 Use the shipped systemd user units to run `kura run --due` every 15 minutes:

@@ -47,6 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--schedule")
     add_parser.add_argument("--strategy", choices=["full", "quick", "rss"])
     add_parser.add_argument("--cookies")
+    add_parser.add_argument("--downloader", choices=["ytdlp", "nndownload"], default=None,
+                            help="downloader to use (default: ytdlp)")
+    add_parser.add_argument("--auth", default=None,
+                            help="verbatim nndownload auth args (e.g. '--session-cookie /path/to/file')")
     add_parser.set_defaults(func=add_command)
 
     list_parser = subcommands.add_parser("list", help="list configured sources")
@@ -101,7 +105,9 @@ def build_parser() -> argparse.ArgumentParser:
     suppress_parser.add_argument("video_id", help="video ID to suppress")
     suppress_parser.add_argument("--reason", default=None, help="optional reason for suppression")
     suppress_parser.add_argument(
-        "--extractor", default="youtube", help="extractor name (default: youtube)"
+        "--extractor",
+        default=None,
+        help="extractor name (default: derived from source — 'niconico' for nndownload sources, 'youtube' otherwise)",
     )
     suppress_parser.set_defaults(func=suppress_command)
 

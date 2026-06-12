@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
+import re
 import shlex
 import shutil
 import sqlite3
@@ -18,6 +19,7 @@ from .archive import MEDIA_EXTENSIONS, append_archive_entries, archive_key, read
 from .config import (
     DEFAULT_CONFIG_TEXT,
     DEFAULT_PROFILE_TEXT,
+    NICONICO_PROFILE_TEXT,
     ConfigError,
     append_source,
     load_config,
@@ -75,6 +77,13 @@ def init_command(_args) -> int:
         profile_path.write_text(DEFAULT_PROFILE_TEXT)
         print(f"created: {profile_path}")
 
+    niconico_profile_path = paths.profile_file("niconico-archive", ext="nnconf")
+    if niconico_profile_path.exists():
+        print(f"exists: {niconico_profile_path}")
+    else:
+        niconico_profile_path.write_text(NICONICO_PROFILE_TEXT)
+        print(f"created: {niconico_profile_path}")
+
     state.init_db()
     print(f"initialized: {paths.state_db()}")
     print()
@@ -91,6 +100,8 @@ def add_command(args) -> int:
         schedule=args.schedule,
         strategy=args.strategy,
         cookies=args.cookies,
+        downloader=getattr(args, "downloader", None),
+        auth=getattr(args, "auth", None),
     )
     print(f"added: {source.name}")
     return 0
@@ -145,13 +156,57 @@ def import_command(args) -> int:
         return _import_locked(source, name, dry_run)
 
 
+_NNDOWNLOAD_ID_RE = re.compile(r"^(?:sm|so|nm)\d+$")
+
+
+def _nndownload_archive_key(path: Path) -> str | None:
+    """Try to extract a niconico archive key from an nndownload metadata sidecar.
+
+    Returns ``"niconico <id>"`` when *path* is a valid nndownload sidecar, or
+    ``None`` when it is not (caller should silently ignore).
+
+    Parse errors in generic ``.json`` files are silently swallowed — the file
+    was never claimed to be nndownload evidence.  (Compare with ``.info.json``
+    parse errors, which are warned about.)
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None  # silently skip; not our file
+
+    if not isinstance(data, dict):
+        return None
+
+    video_id = data.get("id")
+    if not isinstance(video_id, str) or not _NNDOWNLOAD_ID_RE.match(video_id):
+        return None
+
+    # Require at least one URL-ish field pointing at nicovideo.jp.
+    for field in ("document_url", "url", "thumbnail_url"):
+        val = data.get(field, "")
+        if isinstance(val, str) and "nicovideo.jp" in val:
+            return f"niconico {video_id}"
+
+    return None
+
+
 def _import_locked(source, name: str, dry_run: bool) -> int:
     archive_path = source.archive_file
     archive_set = read_archive(archive_path)
 
-    # Scan output_dir recursively for .info.json files.
+    # Scan output_dir recursively for .info.json files and nndownload sidecars.
     output_dir = source.output_dir
     info_json_paths: list[Path] = sorted(output_dir.rglob("*.info.json")) if output_dir.is_dir() else []
+
+    # Collect candidate nndownload sidecar paths: *.json but NOT *.info.json
+    # and NOT *.comments.json.
+    nn_json_paths: list[Path] = []
+    if output_dir.is_dir():
+        for p in sorted(output_dir.rglob("*.json")):
+            name_str = p.name
+            if name_str.endswith(".info.json") or name_str.endswith(".comments.json"):
+                continue
+            nn_json_paths.append(p)
 
     scanned = 0
     already_in_archive = 0
@@ -191,9 +246,20 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
         if key in archive_set:
             already_in_archive += 1
 
+    # Process nndownload sidecar files.
+    for nn_path in nn_json_paths:
+        key = _nndownload_archive_key(nn_path)
+        if key is None:
+            continue  # not nndownload evidence — silently skip
+        scanned += 1
+        evidence_keys.add(key)
+        if key in archive_set:
+            already_in_archive += 1
+
     missing = sorted(evidence_keys - archive_set)
 
-    # Detect unverifiable media files.
+    # Detect unverifiable media files: a media file is unverifiable when it has
+    # neither a sibling .info.json nor a sibling qualifying nndownload sidecar.
     unverifiable: list[Path] = []
     if output_dir.is_dir():
         for media_file in output_dir.rglob("*"):
@@ -208,6 +274,18 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
             # Check if there is ANY .info.json in the same directory.
             if any(media_file.parent.glob("*.info.json")):
                 continue
+            # Check for a qualifying nndownload sidecar in the same directory.
+            sibling_nn = media_file.parent / f"{stem}.json"
+            if sibling_nn.exists() and _nndownload_archive_key(sibling_nn) is not None:
+                continue
+            # Check if ANY qualifying nndownload sidecar exists in the directory.
+            has_nn_sidecar = any(
+                _nndownload_archive_key(p) is not None
+                for p in media_file.parent.glob("*.json")
+                if not p.name.endswith(".info.json") and not p.name.endswith(".comments.json")
+            )
+            if has_nn_sidecar:
+                continue
             unverifiable.append(media_file)
 
     # Orphan archive entries: in archive but not evidenced by any info.json.
@@ -215,7 +293,7 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
 
     # --- Report ---
     print(f"source: {name}")
-    print(f"  info.json files scanned:  {scanned}")
+    print(f"  evidence files scanned:   {scanned}")
     print(f"  already in archive:       {already_in_archive}")
     if dry_run:
         print(f"  would append:             {len(missing)}")
@@ -429,7 +507,7 @@ def run_command(args) -> int:
 
 
 def verify_command(args) -> int:
-    """Dry-run yt-dlp for a named source to report pending downloads."""
+    """Dry-run for a named source to report pending downloads."""
     name: str = args.name
 
     try:
@@ -445,6 +523,11 @@ def verify_command(args) -> int:
         return 1
 
     source.output_dir.mkdir(parents=True, exist_ok=True)
+
+    if source.downloader == "nndownload":
+        return _verify_nndownload(source)
+
+    # yt-dlp path (unchanged).
     profile_path = paths.profile_file(paths.config_dir(), source.profile)
     cmd = build_command(source, profile_path, simulate=True)
 
@@ -463,6 +546,60 @@ def verify_command(args) -> int:
     for line in lines[:20]:
         print(f"  {line}")
     print("pending = items yt-dlp would download now (already-archived items are excluded)")
+
+    if proc.returncode in (0, 101):
+        return 0
+    return 1
+
+
+def _verify_nndownload(source) -> int:
+    """Verify an nndownload source using --list-ids."""
+    import re as _re
+    from .archive import read_archive
+
+    # Build: nndownload --non-interactive <auth> --list-ids <url>
+    cmd = ["nndownload", "--non-interactive"]
+    if source.auth:
+        cmd.extend(shlex.split(source.auth))
+    cmd += ["--list-ids", source.url]
+
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    # Parse ids: non-empty token lines that look like video IDs.
+    # Ignore log-noise lines containing spaces.
+    all_lines = proc.stdout.splitlines()
+    id_lines = [
+        line.strip()
+        for line in all_lines
+        if line.strip() and " " not in line.strip()
+    ]
+    ids = set(id_lines)
+
+    # Read archived niconico ids.
+    archive_entries = read_archive(source.archive_file)
+    archived_ids: set[str] = set()
+    for entry in archive_entries:
+        if entry.startswith("niconico "):
+            archived_ids.add(entry.split(" ", 1)[1])
+
+    # Zero-ID guard: if we parsed nothing but the archive is non-empty, treat as failure.
+    if not ids and archived_ids:
+        print(
+            f"error: enumeration returned no ids — treating as failure, not an empty backlog"
+        )
+        return 1
+
+    pending = ids - archived_ids
+    count = len(pending)
+    print(f"pending: {count}")
+    for vid_id in sorted(pending)[:20]:
+        print(f"  {vid_id}")
+    print("pending = items nndownload would download now (already-archived items are excluded)")
 
     if proc.returncode in (0, 101):
         return 0
@@ -744,7 +881,7 @@ def suppress_command(args) -> int:
     source_name: str = args.name
     video_id: str = args.video_id
     reason: str | None = getattr(args, "reason", None)
-    extractor: str = getattr(args, "extractor", "youtube") or "youtube"
+    explicit_extractor: str | None = getattr(args, "extractor", None) or None
 
     # Validate video_id: non-empty, no spaces.
     if not video_id or " " in video_id:
@@ -762,6 +899,14 @@ def suppress_command(args) -> int:
         known = ", ".join(s.name for s in config.sources)
         print(f"error: unknown source {source_name!r}" + (f"; known: {known}" if known else ""))
         return 1
+
+    # Derive default extractor from source downloader when not explicitly given.
+    if explicit_extractor is not None:
+        extractor = explicit_extractor
+    elif getattr(source, "downloader", None) == "nndownload":
+        extractor = "niconico"
+    else:
+        extractor = "youtube"
 
     db_path = paths.state_db()
     state.init_db(db_path)
@@ -800,7 +945,7 @@ def suppress_command(args) -> int:
                 (source_name, video_id),
             )
 
-    print(f"suppressed: {archive_entry}")
+    print(f"suppressed: {archive_entry}  (extractor: {extractor})")
     return 0
 
 
@@ -980,6 +1125,42 @@ def doctor_command(_args) -> int:
         fail(f"config.yaml: {exc}")
         return 1  # skip per-source checks
 
+    # 3b. nndownload checks (only when at least one nndownload source exists).
+    has_nndownload_sources = any(s.downloader == "nndownload" for s in config.sources)
+    if has_nndownload_sources:
+        nn_path = shutil.which("nndownload")
+        if nn_path is None:
+            fail("nndownload not found on PATH (required for nndownload sources)")
+        else:
+            try:
+                nn_ver_result = subprocess.run(
+                    ["nndownload", "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                nn_version = nn_ver_result.stdout.strip()
+                ok(f"nndownload found: {nn_version}")
+            except Exception as exc:
+                fail(f"nndownload --version failed: {exc}")
+                nn_version = ""
+
+            # Check that nndownload is the patched version (has --download-archive).
+            try:
+                help_result = subprocess.run(
+                    ["nndownload", "--help"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                help_text = help_result.stdout + help_result.stderr
+                if "--download-archive" not in help_text:
+                    fail("unpatched nndownload: --download-archive not found in --help output")
+                else:
+                    ok("nndownload is patched (--download-archive present)")
+            except Exception as exc:
+                fail(f"nndownload --help failed: {exc}")
+
     # 4. Per-source checks.
     for source in config.sources:
         prefix = f"source {source.name!r}"
@@ -1013,9 +1194,15 @@ def doctor_command(_args) -> int:
         profile_path = paths.profile_file(paths.config_dir(), source.profile)
         ok(f"{prefix}: profile {source.profile!r} → {profile_path}")
 
-        # Cookies.
+        # Cookies (ytdlp sources).
         if source.cookies:
             _check_cookies(source.cookies, prefix, ok, warn, fail)
+
+        # nndownload per-source checks.
+        if source.downloader == "nndownload":
+            if source.auth:
+                ok(f"{prefix}: auth present")
+            _check_session_cookie(source.auth or "", prefix, ok, warn, fail)
 
     # 5. state.db integrity.
     db_path = paths.state_db()
@@ -1089,6 +1276,34 @@ def _check_cookies(cookies: str, prefix: str, ok, warn, fail) -> None:
                 f"{prefix}: cookies from browser {browser!r} "
                 "(extraction tested only at run time)"
             )
+            i += 2
+            continue
+        i += 1
+
+
+def _check_session_cookie(auth: str, prefix: str, ok, warn, fail) -> None:
+    """Check --session-cookie file in nndownload auth string."""
+    import shlex as _shlex
+    import stat as _stat
+    try:
+        parts = _shlex.split(auth)
+    except ValueError:
+        return
+
+    i = 0
+    while i < len(parts):
+        if parts[i] == "--session-cookie" and i + 1 < len(parts):
+            cookie_path = Path(parts[i + 1]).expanduser()
+            if not cookie_path.exists():
+                fail(f"{prefix}: session-cookie file not found: {cookie_path}")
+            elif cookie_path.stat().st_size == 0:
+                fail(f"{prefix}: session-cookie file is empty: {cookie_path}")
+            else:
+                ok(f"{prefix}: session-cookie file found: {cookie_path}")
+                # Warn if world-readable.
+                mode = cookie_path.stat().st_mode
+                if mode & 0o004:
+                    warn(f"{prefix}: session-cookie file is world-readable: {cookie_path} (consider chmod 600)")
             i += 2
             continue
         i += 1

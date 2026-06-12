@@ -29,19 +29,20 @@ def profiles_dir() -> Path:
     return config_dir() / "profiles"
 
 
-def profile_file(profile_or_config_dir: str | Path, profile: str | None = None) -> Path:
-    """Return the path to a profile ``.conf`` file.
+def profile_file(profile_or_config_dir: str | Path, profile: str | None = None, *, ext: str = "conf") -> Path:
+    """Return the path to a profile file (default extension ``.conf``).
 
     Two calling conventions are supported::
 
-        profile_file("av1-archive")                     # uses config_dir()
-        profile_file(config_dir, "av1-archive")         # explicit config_dir
+        profile_file("av1-archive")                          # uses config_dir()
+        profile_file(config_dir, "av1-archive")              # explicit config_dir
+        profile_file(config_dir, "niconico-archive", ext="nnconf")
     """
     if profile is None:
         # Single-arg form: profile_or_config_dir is the profile name.
-        return profiles_dir() / f"{profile_or_config_dir}.conf"
+        return profiles_dir() / f"{profile_or_config_dir}.{ext}"
     # Two-arg form: profile_or_config_dir is the config directory.
-    return Path(profile_or_config_dir) / "profiles" / f"{profile}.conf"
+    return Path(profile_or_config_dir) / "profiles" / f"{profile}.{ext}"
 
 
 def state_db(state_dir_path: Path | None = None) -> Path:

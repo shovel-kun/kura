@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import archive, paths, state
-from .config import Source, parse_duration
-from .failures import classify_line
+from .config import Source, load_nnconf, parse_duration
+from .failures import classify_line, classify_nndownload_failure, parse_result_line
 from .locks import source_lock
 
 
@@ -69,6 +69,40 @@ def build_command(
     else:
         cmd.append(source.url)
 
+    return cmd
+
+
+def build_nndownload_command(source: Source, profile_args: list[str]) -> list[str]:
+    """Build the nndownload argv list for *source*.
+
+    Parameters
+    ----------
+    source:
+        The source configuration object (must have ``downloader == 'nndownload'``).
+    profile_args:
+        Pre-parsed argv list from the ``.nnconf`` profile file.
+    """
+    cmd: list[str] = [
+        "nndownload",
+        "--non-interactive",
+        "--download-archive", str(source.archive_file),
+    ]
+
+    if source.auth:
+        cmd.extend(shlex.split(source.auth))
+
+    cmd.extend(profile_args)
+
+    if source.update_strategy == "quick":
+        cmd.append("--break-on-existing")
+
+    if source.extra_args:
+        if isinstance(source.extra_args, str):
+            cmd.extend(shlex.split(source.extra_args))
+        else:
+            cmd.extend(source.extra_args)
+
+    cmd.append(source.url)
     return cmd
 
 
@@ -254,28 +288,47 @@ def _run_source_locked(source: Source, config_dir: Path, state_dir: Path, *, qui
     # 5. Snapshot archive.
     old_keys = archive.read_archive(source.archive_file)
 
-    # 6. Capture yt-dlp version.
-    version_result = subprocess.run(
-        ["yt-dlp", "--version"],
-        capture_output=True,
-        text=True,
-    )
-    ytdlp_version = version_result.stdout.strip()
+    # 6. Capture downloader version.
+    if source.downloader == "nndownload":
+        version_result = subprocess.run(
+            ["nndownload", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        downloader_version = f"nndownload {version_result.stdout.strip()}"
+    else:
+        version_result = subprocess.run(
+            ["yt-dlp", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        downloader_version = version_result.stdout.strip()
 
     # 7. Build log path.
     started_at = datetime.now(tz=timezone.utc)
     timestamp_compact = started_at.strftime("%Y%m%dT%H%M%SZ")
     log_path = log_source_dir / f"{timestamp_compact}.log"
 
-    # 8. Build command based on effective strategy.
-    profile_path = paths.profile_file(config_dir, source.profile)
-
-    if effective_strategy == "quick":
-        tab_urls = _channel_tab_urls(source.url)
-        cmd = build_command(source, profile_path, strategy_args=_QUICK_FLAGS, urls=tab_urls)
+    # 8. Build command based on downloader and effective strategy.
+    if source.downloader == "nndownload":
+        profile_path = paths.profile_file(config_dir, source.profile, ext="nnconf")
+        profile_args = load_nnconf(profile_path)
+        # For promoted full runs, effective_strategy differs from source.update_strategy.
+        # build_nndownload_command reads update_strategy to decide --break-on-existing.
+        if effective_strategy != source.update_strategy:
+            import dataclasses
+            source_for_cmd = dataclasses.replace(source, update_strategy=effective_strategy)
+        else:
+            source_for_cmd = source
+        cmd = build_nndownload_command(source_for_cmd, profile_args)
     else:
-        # full
-        cmd = build_command(source, profile_path)
+        profile_path = paths.profile_file(config_dir, source.profile)
+        if effective_strategy == "quick":
+            tab_urls = _channel_tab_urls(source.url)
+            cmd = build_command(source, profile_path, strategy_args=_QUICK_FLAGS, urls=tab_urls)
+        else:
+            # full
+            cmd = build_command(source, profile_path)
 
     # 9. Open log file and write header.
     output_lines: list[str] = []
@@ -310,7 +363,10 @@ def _run_source_locked(source: Source, config_dir: Path, state_dir: Path, *, qui
     new_count = len(new_keys)
 
     # 12. Classify failures from output lines.
-    failure_summary = _collect_failures(source.name, output_lines, db)
+    if source.downloader == "nndownload":
+        failure_summary = _collect_nndownload_failures(source.name, output_lines, db)
+    else:
+        failure_summary = _collect_failures(source.name, output_lines, db)
 
     # 13. Insert runs row.
     ended_at = datetime.now(tz=timezone.utc)
@@ -327,7 +383,7 @@ def _run_source_locked(source: Source, config_dir: Path, state_dir: Path, *, qui
                 started_at.isoformat(),
                 ended_at.isoformat(),
                 exit_code,
-                ytdlp_version,
+                downloader_version,
                 new_count,
                 str(log_path),
                 failure_summary,
@@ -481,7 +537,7 @@ def _collect_failures(
     output_lines: list[str],
     db: object,  # sqlite3.Connection
 ) -> str | None:
-    """Classify output lines, upsert video_failures rows, return failure_summary."""
+    """Classify yt-dlp output lines, upsert video_failures rows, return failure_summary."""
     counts: dict[str, int] = {"permanent": 0, "transient": 0}
     now = datetime.now(tz=timezone.utc).isoformat()
 
@@ -513,6 +569,57 @@ def _collect_failures(
                         line.strip()[:500],
                     ),
                 )
+
+    parts = []
+    if counts.get("permanent", 0):
+        parts.append(f"{counts['permanent']} permanent")
+    if counts.get("transient", 0):
+        parts.append(f"{counts['transient']} transient")
+
+    return ", ".join(parts) if parts else None
+
+
+def _collect_nndownload_failures(
+    source_name: str,
+    output_lines: list[str],
+    db: object,  # sqlite3.Connection
+) -> str | None:
+    """Parse nndownload [result] lines, upsert video_failures rows, return failure_summary."""
+    counts: dict[str, int] = {}
+    now = datetime.now(tz=timezone.utc).isoformat()
+
+    for line in output_lines:
+        parsed = parse_result_line(line)
+        if parsed is None:
+            continue
+        status, video_id, detail = parsed
+        if status != "fail":
+            continue
+
+        kind = classify_nndownload_failure(detail)
+        counts[kind] = counts.get(kind, 0) + 1
+
+        with db:
+            db.execute(
+                """
+                INSERT INTO video_failures
+                    (source, video_id, url, kind, attempts, last_seen, last_error)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(source, video_id) DO UPDATE SET
+                    attempts   = attempts + 1,
+                    last_seen  = excluded.last_seen,
+                    last_error = excluded.last_error,
+                    kind       = excluded.kind
+                """,
+                (
+                    source_name,
+                    video_id,
+                    None,
+                    kind,
+                    now,
+                    line.strip()[:500],
+                ),
+            )
 
     parts = []
     if counts.get("permanent", 0):

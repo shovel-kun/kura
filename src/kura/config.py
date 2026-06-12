@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,8 @@ DEFAULT_SCHEDULE = "0 */6 * * *"
 DEFAULT_UPDATE_STRATEGY = "quick"
 DEFAULT_FULL_REINDEX_EVERY = "7d"
 VALID_UPDATE_STRATEGIES = {"full", "quick", "rss"}
+VALID_DOWNLOADERS = {"ytdlp", "nndownload"}
+NICONICO_VALID_STRATEGIES = {"full", "quick"}
 
 DEFAULT_PROFILE_TEXT = """--continue
 --retries 4
@@ -53,6 +56,14 @@ defaults:
 
 # Add sources with `kura add NAME URL --dir /absolute/path`.
 sources: []
+"""
+
+NICONICO_PROFILE_TEXT = """\
+# profiles/niconico-archive.nnconf — nndownload arguments, one per line
+--dump-metadata
+--download-thumbnail
+--download-comments
+--output-path "{title} [{id}]/{title} [{id}].{ext}"
 """
 
 
@@ -95,6 +106,8 @@ class Source:
     full_reindex_every: str
     extra_args: list[str]
     enabled: bool
+    downloader: str = "ytdlp"
+    auth: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +192,8 @@ def append_source(
     schedule: str | None = None,
     strategy: str | None = None,
     cookies: str | None = None,
+    downloader: str | None = None,
+    auth: str | None = None,
     config_path: Path | None = None,
 ) -> Source:
     config_path = config_path or paths.config_file()
@@ -218,6 +233,10 @@ def append_source(
         new_item["update_strategy"] = strategy
     if cookies is not None:
         new_item["cookies"] = cookies
+    if downloader is not None:
+        new_item["downloader"] = downloader
+    if auth is not None:
+        new_item["auth"] = auth
     new_item["extra_args"] = CommentedSeq()
     new_item["enabled"] = True
     sources_seq.append(new_item)
@@ -247,8 +266,47 @@ def _source_from_mapping(item: dict[str, Any], defaults: dict[str, Any], config_
     if not archive_file.is_absolute():
         raise ConfigError(f"source {name!r}: archive_file must be absolute")
 
-    profile = str(item.get("profile") or defaults["profile"])
-    if not (config_dir / "profiles" / f"{profile}.conf").exists():
+    # Downloader field.
+    downloader_raw = item.get("downloader") or "ytdlp"
+    downloader = str(downloader_raw)
+    if downloader not in VALID_DOWNLOADERS:
+        raise ConfigError(
+            f"source {name!r}: invalid downloader {downloader!r}; must be one of {sorted(VALID_DOWNLOADERS)}"
+        )
+
+    # Auth field.
+    auth_raw = item.get("auth")
+    auth = str(auth_raw) if auth_raw is not None else None
+
+    if auth is not None and downloader == "ytdlp":
+        raise ConfigError(
+            f"source {name!r}: auth is only valid for nndownload sources; "
+            "use cookies for yt-dlp sources"
+        )
+
+    if downloader == "nndownload":
+        # Validate auth is present and contains an unattended-auth token.
+        if not auth:
+            raise ConfigError(
+                f"source {name!r}: nndownload sources require auth; "
+                "without it nndownload would hang prompting for credentials"
+            )
+        _validate_niconico_auth(name, auth)
+        # Validate URL is a supported niconico video URL.
+        _validate_niconico_url(name, str(url))
+
+    # The global default profile is a yt-dlp profile; nndownload sources
+    # without an explicit profile get the niconico default instead.
+    if downloader == "nndownload":
+        profile = str(item.get("profile") or "niconico-archive")
+    else:
+        profile = str(item.get("profile") or defaults["profile"])
+    # Profile file extension depends on downloader.
+    if downloader == "nndownload":
+        profile_path = config_dir / "profiles" / f"{profile}.nnconf"
+    else:
+        profile_path = config_dir / "profiles" / f"{profile}.conf"
+    if not profile_path.exists():
         raise ConfigError(f"source {name!r}: unknown profile {profile!r}")
 
     schedule = str(item.get("schedule") or defaults["schedule"])
@@ -258,10 +316,20 @@ def _source_from_mapping(item: dict[str, Any], defaults: dict[str, Any], config_
     update_strategy = str(item.get("update_strategy") or defaults["update_strategy"])
     if update_strategy not in VALID_UPDATE_STRATEGIES:
         raise ConfigError(f"source {name!r}: invalid update_strategy {update_strategy!r}")
-    if update_strategy in ("rss", "quick") and not is_youtube_channel_url(str(url)):
-        raise ConfigError(
-            f"source {name!r}: {update_strategy} update_strategy requires a YouTube channel URL"
-        )
+
+    if downloader == "nndownload":
+        # nndownload only supports full and quick strategies.
+        if update_strategy not in NICONICO_VALID_STRATEGIES:
+            raise ConfigError(
+                f"source {name!r}: nndownload sources only support full or quick update_strategy "
+                f"(got {update_strategy!r})"
+            )
+    else:
+        # ytdlp: quick/rss require a YouTube channel URL.
+        if update_strategy in ("rss", "quick") and not is_youtube_channel_url(str(url)):
+            raise ConfigError(
+                f"source {name!r}: {update_strategy} update_strategy requires a YouTube channel URL"
+            )
 
     # Per-source full_reindex_every (falls back to defaults).
     full_reindex_every_raw = item.get("full_reindex_every") or defaults["full_reindex_every"]
@@ -294,7 +362,106 @@ def _source_from_mapping(item: dict[str, Any], defaults: dict[str, Any], config_
         full_reindex_every=full_reindex_every,
         extra_args=list(extra_args),
         enabled=enabled,
+        downloader=downloader,
+        auth=auth,
     )
+
+
+def _validate_niconico_auth(name: str, auth: str) -> None:
+    """Check that *auth* contains at least one unattended-login token.
+
+    Raises ConfigError with a message explaining the hang-on-prompt risk
+    when no recognized token is found.
+    """
+    # Acceptable tokens: -g, -n, --session-cookie, or both -u and -p.
+    has_g = re.search(r"(?:^|\s)-g(?:\s|$)", auth) is not None
+    has_n = re.search(r"(?:^|\s)-n(?:\s|$)", auth) is not None
+    has_session_cookie = "--session-cookie" in auth
+    has_u = re.search(r"(?:^|\s)-u(?:\s|$)", auth) is not None
+    has_p = re.search(r"(?:^|\s)-p(?:\s|$)", auth) is not None
+    if not (has_g or has_n or has_session_cookie or (has_u and has_p)):
+        raise ConfigError(
+            f"source {name!r}: nndownload auth must contain one of -g, -n, --session-cookie, "
+            "or both -u and -p; without recognized auth nndownload would hang prompting for credentials"
+        )
+
+
+def _validate_niconico_url(name: str, url: str) -> None:
+    """Validate that *url* is a supported niconico video-type URL.
+
+    Accepted:
+    - www.nicovideo.jp/watch/<id>
+    - www.nicovideo.jp/mylist/<id>
+    - www.nicovideo.jp/user/<id>  (and /user/<id>/video)
+    - www.nicovideo.jp/series/<id>
+    - ch.nicovideo.jp/<slug>  (and /<slug>/video)
+
+    Rejected with "videos only":
+    - seiga.nicovideo.jp
+    - live.nicovideo.jp
+    - nicovideo.jp/manga (or /seiga, /live, /comic)
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parsed.path.rstrip("/")
+
+    # Reject known non-video services.
+    if host in {"seiga.nicovideo.jp", "live.nicovideo.jp", "comic.nicovideo.jp"}:
+        raise ConfigError(
+            f"source {name!r}: URL {url!r} is not a video URL — "
+            "seiga/live/manga are videos only (use a watch/mylist/user/series/channel URL)"
+        )
+    if host == "nicovideo.jp" and re.match(r"^/(seiga|live|manga|comic)", path):
+        raise ConfigError(
+            f"source {name!r}: URL {url!r} is not a video URL — "
+            "seiga/live/manga are videos only (use a watch/mylist/user/series/channel URL)"
+        )
+
+    # Accept ch.nicovideo.jp/<slug> and /<slug>/video.
+    if host == "ch.nicovideo.jp":
+        # Must have a non-empty slug segment.
+        if re.match(r"^/[^/]+(/video)?/?$", path):
+            return
+        raise ConfigError(
+            f"source {name!r}: URL {url!r} is not a supported nicovideo URL "
+            "(use watch/mylist/user/series or ch.nicovideo.jp/<slug>)"
+        )
+
+    if host == "nicovideo.jp":
+        accepted = (
+            re.match(r"^/watch/", path)
+            or re.match(r"^/mylist/", path)
+            or re.match(r"^/user/\d+(/video)?$", path)
+            or re.match(r"^/series/", path)
+        )
+        if accepted:
+            return
+        raise ConfigError(
+            f"source {name!r}: URL {url!r} is not a supported nicovideo URL "
+            "(use watch/mylist/user/series or ch.nicovideo.jp/<slug>)"
+        )
+
+    raise ConfigError(
+        f"source {name!r}: URL {url!r} is not a supported nicovideo URL "
+        "(use watch/mylist/user/series or ch.nicovideo.jp/<slug>)"
+    )
+
+
+def load_nnconf(profile_path: Path) -> list[str]:
+    """Parse an nndownload ``.nnconf`` profile file into an argv list.
+
+    Each non-blank, non-comment line is shlex-split and the resulting
+    tokens are concatenated in order.
+    """
+    args: list[str] = []
+    for line in profile_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        args.extend(shlex.split(stripped))
+    return args
 
 
 def is_youtube_channel_url(url: str) -> bool:
