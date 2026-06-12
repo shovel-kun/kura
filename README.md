@@ -5,6 +5,7 @@ kura is a small yt-dlp archive orchestrator for existing, manually managed chann
 ## Commands
 
 ```sh
+kura --version
 kura init
 kura add NAME URL --dir /absolute/archive/dir [--profile PROFILE] [--schedule "0 */6 * * *"] [--strategy full|quick|rss] [--cookies "ARGS"]
 kura list
@@ -18,6 +19,8 @@ kura pause NAME
 kura resume NAME
 kura suppress NAME VIDEO_ID [--reason TEXT] [--extractor EXT]
 kura unsuppress NAME VIDEO_ID [--extractor EXT]
+kura logs NAME [-n N] [--path]
+kura doctor
 ```
 
 `kura import NAME` scans the source's output directory for `*.info.json` sidecar files, computes the yt-dlp archive key for each video, and appends any missing keys to `archive.txt` (backing it up first).  Pass `--dry-run` to preview the report without writing anything.
@@ -36,6 +39,10 @@ kura unsuppress NAME VIDEO_ID [--extractor EXT]
 
 `kura pause NAME` / `kura resume NAME` flip the `enabled` flag in `config.yaml`, preserving all comments and formatting.  A paused source is skipped by `run --due` and `run --all`.
 
+`kura logs NAME` prints the last 50 lines of the most recent run log for the named source.  Use `-n N` to override the line count.  Use `--path` to print only the absolute path of the log file (useful for piping into a pager: `less "$(kura logs NAME --path)"`).
+
+`kura doctor` runs a series of health checks and reports each as `ok:`, `warn:`, or `FAIL:`.  Exits 0 when no `FAIL` lines were emitted (warnings are allowed), exits 1 otherwise.  Checks include: yt-dlp on PATH and version freshness (warns if > 90 days old), ffmpeg on PATH, config.yaml validity, per-source output_dir and archive accessibility, cookies file existence, state.db integrity, currently-running sources (lock probe), and systemd timer status.
+
 ## Update Strategies
 
 Each source has an `update_strategy` that controls how `kura run` invokes yt-dlp:
@@ -47,6 +54,17 @@ Each source has an `update_strategy` that controls how `kura run` invokes yt-dlp
 | `rss` | YouTube channel URL only | Fetches the channel RSS feed; if all items are already archived, records a no-op run without invoking yt-dlp. Otherwise falls through to `quick`. On feed errors, logs a warning and falls through to `quick`. |
 
 Set the strategy in `config.yaml` or with `kura add --strategy STRATEGY`.
+
+### Concurrency
+
+`kura run --due` and `kura run --all` can run multiple sources in parallel.  Set `concurrency` in the `defaults` section of `config.yaml` (integer 1–8; default 1):
+
+```yaml
+defaults:
+  concurrency: 4   # run up to 4 sources simultaneously
+```
+
+When `concurrency > 1` and more than one source is running, per-line console streaming is suppressed (each source's full output still goes to its log file) and only a start line and summary line are printed per source.  Single-source `kura run NAME` always streams output regardless of the concurrency setting.
 
 ### full_reindex_every
 
@@ -116,4 +134,3 @@ loginctl enable-linger $USER
 
 The timer fires every 15 minutes (`OnCalendar=*:0/15`); `Persistent=true` means a missed tick (e.g. after suspend) is caught on the next boot.  kura then checks each source's cron schedule independently, so sources with e.g. `0 */6 * * *` only actually run every 6 hours.
 
-`logs` and `doctor` are registered as stubs and exit with status 2 until a later release.

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
+import os
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
 from croniter import croniter
@@ -264,6 +267,31 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
     return 0
 
 
+def _local_ts(utc_iso: str, width: int = 16) -> str:
+    """Convert a UTC ISO-8601 string to a local-time display string.
+
+    Parameters
+    ----------
+    utc_iso:
+        UTC ISO-8601 timestamp string as stored in the database.
+    width:
+        How many characters to keep after converting (default 16 → ``YYYY-MM-DD HH:MM``).
+    """
+    try:
+        dt = datetime.fromisoformat(utc_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone()
+        return local_dt.strftime("%Y-%m-%d %H:%M")[:width]
+    except Exception:
+        return utc_iso[:width].replace("T", " ")
+
+
+def _local_tz_name() -> str:
+    """Return the local timezone abbreviation (e.g. 'JST', 'UTC')."""
+    return datetime.now().astimezone().tzname() or "local"
+
+
 def compute_next_due(schedule: str, last_check_at: str | None, now: datetime | None = None) -> datetime:
     """Return the next scheduled datetime after *last_check_at*.
 
@@ -348,6 +376,7 @@ def run_command(args) -> int:
 
     now = datetime.now(tz=timezone.utc)
     any_failure = False
+    due_sources: list = []
 
     for source in config.sources:
         if not source.enabled:
@@ -358,17 +387,43 @@ def run_command(args) -> int:
             last_check_at = _query_last_check_at(db_path, source.name)
             if not is_source_due(source.schedule, last_check_at, now):
                 next_dt = compute_next_due(source.schedule, last_check_at, now)
-                print(f"  {source.name}: not due (next {next_dt.strftime('%Y-%m-%d %H:%M')} UTC)")
+                next_local = next_dt.astimezone().strftime("%Y-%m-%d %H:%M")
+                tz_name = _local_tz_name()
+                print(f"  {source.name}: not due (next {next_local} {tz_name})")
                 continue
 
-        exit_code = run_source(source, paths.config_dir(), paths.state_dir())
-        if exit_code is None:
-            print(f"  {source.name}: skipped (already running)")
-        elif exit_code in (0, 101):
-            print(f"  {source.name}: ran (exit={exit_code})")
-        else:
-            print(f"  {source.name}: failed (exit={exit_code})")
-            any_failure = True
+        due_sources.append(source)
+
+    # Run due sources — serially or concurrently based on config.
+    concurrency: int = config.defaults.get("concurrency", 1)
+
+    if concurrency <= 1 or len(due_sources) <= 1:
+        # Serial path: stream output normally.
+        for source in due_sources:
+            exit_code = run_source(source, paths.config_dir(), paths.state_dir())
+            if exit_code is None:
+                print(f"  {source.name}: skipped (already running)")
+            elif exit_code in (0, 101):
+                print(f"  {source.name}: ran (exit={exit_code})")
+            else:
+                print(f"  {source.name}: failed (exit={exit_code})")
+                any_failure = True
+    else:
+        # Concurrent path: run up to `concurrency` sources at once, quiet mode.
+        def _run_one(src):
+            return src, run_source(src, paths.config_dir(), paths.state_dir(), quiet=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {pool.submit(_run_one, src): src for src in due_sources}
+            for fut in concurrent.futures.as_completed(futures):
+                src, exit_code = fut.result()
+                if exit_code is None:
+                    print(f"  {src.name}: skipped (already running)")
+                elif exit_code in (0, 101):
+                    print(f"  {src.name}: ran (exit={exit_code})")
+                else:
+                    print(f"  {src.name}: failed (exit={exit_code})")
+                    any_failure = True
 
     return 1 if any_failure else 0
 
@@ -498,7 +553,7 @@ def status_command(args) -> int:
         exit_str = "-"
         new_str = "-"
         if lr.get("ended_at"):
-            last_run_str = lr["ended_at"][:16].replace("T", " ")
+            last_run_str = _local_ts(lr["ended_at"])
             exit_str = str(lr["exit_code"])
             new_str = str(lr["new_count"])
 
@@ -510,7 +565,7 @@ def status_command(args) -> int:
         if last_check_at:
             try:
                 next_dt = compute_next_due(source.schedule, last_check_at)
-                next_due_str = next_dt.strftime("%Y-%m-%d %H:%M")
+                next_due_str = next_dt.astimezone().strftime("%Y-%m-%d %H:%M")
             except Exception:
                 next_due_str = "now"
         else:
@@ -535,6 +590,9 @@ def status_command(args) -> int:
         print("  ".join(cell.ljust(widths[col]) for col, cell in enumerate(row)).rstrip())
         if index == 0:
             print("  ".join("-" * w for w in widths).rstrip())
+
+    tz_name = _local_tz_name()
+    print(f"(times shown in {tz_name})")
 
     if any_permanent:
         print()
@@ -561,12 +619,13 @@ def _status_detail(name: str, db) -> int:
     else:
         runs = []
 
-    print("recent runs:")
+    tz_name = _local_tz_name()
+    print(f"recent runs (times in {tz_name}):")
     if runs:
         run_header = ("time", "exit", "new", "failures")
         run_rows: list[tuple[str, ...]] = [run_header]
         for r in runs:
-            started = (r[0] or "")[:16].replace("T", " ")
+            started = _local_ts(r[0]) if r[0] else "-"
             run_rows.append((
                 started,
                 str(r[1]) if r[1] is not None else "-",
@@ -806,6 +865,233 @@ def unsuppress_command(args) -> int:
 
     print(f"unsuppressed: {archive_entry}")
     return 0
+
+
+def logs_command(args) -> int:
+    """Print recent log lines (or log path) for the most recent run of a source."""
+    name: str = args.name
+    n: int = getattr(args, "n", 50) or 50
+    path_only: bool = getattr(args, "path", False)
+
+    try:
+        config = load_config()
+    except ConfigError as error:
+        print(f"error: {error}")
+        return 1
+
+    source = next((s for s in config.sources if s.name == name), None)
+    if source is None:
+        known = ", ".join(s.name for s in config.sources)
+        print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+        return 1
+
+    # Find the most recent log file for this source.
+    log_source_dir = paths.logs_dir() / name
+    if not log_source_dir.is_dir():
+        print(f"no logs yet for {name!r}")
+        return 0
+
+    log_files = sorted(log_source_dir.glob("*.log"))
+    if not log_files:
+        print(f"no logs yet for {name!r}")
+        return 0
+
+    latest_log = log_files[-1]
+
+    if path_only:
+        print(str(latest_log.resolve()))
+        return 0
+
+    # Print the last n lines.
+    try:
+        content = latest_log.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"error: cannot read log {latest_log}: {exc}")
+        return 1
+
+    lines = content.splitlines()
+    tail = lines[-n:] if len(lines) > n else lines
+    for line in tail:
+        print(line)
+    return 0
+
+
+def doctor_command(_args) -> int:
+    """Run a series of health checks and report ok/warn/FAIL for each.
+
+    Exits 0 when no FAIL lines were emitted, 1 otherwise.
+    """
+    has_fail = False
+
+    def ok(msg: str) -> None:
+        print(f"ok: {msg}")
+
+    def warn(msg: str) -> None:
+        print(f"warn: {msg}")
+
+    def fail(msg: str) -> None:
+        nonlocal has_fail
+        has_fail = True
+        print(f"FAIL: {msg}")
+
+    def info(msg: str) -> None:
+        print(f"info: {msg}")
+
+    # 1. yt-dlp on PATH.
+    ytdlp_path = shutil.which("yt-dlp")
+    if ytdlp_path is None:
+        fail("yt-dlp not found on PATH")
+    else:
+        try:
+            ver_result = subprocess.run(
+                ["yt-dlp", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            ytdlp_version = ver_result.stdout.strip()
+            ok(f"yt-dlp found: {ytdlp_version}")
+            # Warn if the version date is older than 90 days.
+            # yt-dlp versions are YYYY.MM.DD (optionally with .N suffix).
+            import re as _re
+            m = _re.match(r"(\d{4})\.(\d{2})\.(\d{2})", ytdlp_version)
+            if m:
+                ver_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                age_days = (date.today() - ver_date).days
+                if age_days > 90:
+                    warn(
+                        f"yt-dlp version is {age_days} days old ({ytdlp_version}); "
+                        "consider updating — extractors rot"
+                    )
+        except Exception as exc:
+            fail(f"yt-dlp --version failed: {exc}")
+
+    # 2. ffmpeg on PATH.
+    if shutil.which("ffmpeg") is None:
+        fail("ffmpeg not found on PATH (needed for embedding/merging)")
+    else:
+        ok("ffmpeg found")
+
+    # 3. Config loads cleanly.
+    try:
+        config = load_config()
+        ok("config.yaml loads cleanly")
+    except (ConfigError, Exception) as exc:
+        fail(f"config.yaml: {exc}")
+        return 1  # skip per-source checks
+
+    # 4. Per-source checks.
+    for source in config.sources:
+        prefix = f"source {source.name!r}"
+
+        # output_dir.
+        if not source.output_dir.exists():
+            warn(f"{prefix}: output_dir {source.output_dir} does not exist (will be created on run)")
+        elif not os.access(source.output_dir, os.W_OK):
+            fail(f"{prefix}: output_dir {source.output_dir} exists but is not writable")
+        else:
+            ok(f"{prefix}: output_dir {source.output_dir} is writable")
+
+        # archive_file parent.
+        archive_parent = source.archive_file.parent
+        if not os.access(archive_parent, os.W_OK):
+            fail(f"{prefix}: archive_file parent {archive_parent} is not writable")
+        else:
+            ok(f"{prefix}: archive_file parent is writable")
+
+        # archive line count (informational).
+        if source.archive_file.exists():
+            try:
+                line_count = sum(1 for _ in source.archive_file.open("r", encoding="utf-8", errors="replace"))
+                info(f"{prefix}: archive has {line_count} entries ({source.archive_file})")
+            except OSError:
+                warn(f"{prefix}: could not read archive file {source.archive_file}")
+        else:
+            info(f"{prefix}: archive file does not exist yet ({source.archive_file})")
+
+        # Profile.
+        profile_path = paths.profile_file(paths.config_dir(), source.profile)
+        ok(f"{prefix}: profile {source.profile!r} → {profile_path}")
+
+        # Cookies.
+        if source.cookies:
+            _check_cookies(source.cookies, prefix, ok, warn, fail)
+
+    # 5. state.db integrity.
+    db_path = paths.state_db()
+    if not db_path.exists():
+        warn(f"state.db does not exist yet ({db_path}); run `kura init`")
+    else:
+        try:
+            db_size = db_path.stat().st_size
+            with state.connect(db_path) as conn:
+                result = conn.execute("PRAGMA quick_check").fetchone()
+            if result and result[0] == "ok":
+                ok(f"state.db integrity ok ({db_size} bytes, {db_path})")
+            else:
+                fail(f"state.db PRAGMA quick_check returned {result!r}")
+        except Exception as exc:
+            fail(f"state.db could not be opened: {exc}")
+
+    # 6. Currently-running sources (lock probe).
+    for source in config.sources:
+        with source_lock(source.name, paths.state_dir()) as acquired:
+            if not acquired:
+                info(f"{source.name!r} appears to be running right now")
+            # Lock is released immediately when acquired — harmless.
+
+    # 7. systemd timer status.
+    systemctl = shutil.which("systemctl")
+    if systemctl is None:
+        warn("systemctl not found; cannot check kura.timer status")
+    else:
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "is-active", "kura.timer"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            status = result.stdout.strip()
+            if status == "active":
+                ok("kura.timer is active")
+            else:
+                warn(f"kura.timer is {status!r} — scheduling not enabled (see README)")
+        except Exception as exc:
+            warn(f"could not query kura.timer: {exc}")
+
+    return 1 if has_fail else 0
+
+
+def _check_cookies(cookies: str, prefix: str, ok, warn, fail) -> None:
+    """Inspect the cookies string and validate any referenced files."""
+    import shlex as _shlex
+    try:
+        parts = _shlex.split(cookies)
+    except ValueError:
+        warn(f"{prefix}: cookies string could not be parsed: {cookies!r}")
+        return
+
+    i = 0
+    while i < len(parts):
+        token = parts[i]
+        if token == "--cookies" and i + 1 < len(parts):
+            cookie_file = Path(parts[i + 1]).expanduser()
+            if not cookie_file.exists():
+                fail(f"{prefix}: cookies file not found: {cookie_file}")
+            else:
+                ok(f"{prefix}: cookies file found: {cookie_file}")
+            i += 2
+            continue
+        if token == "--cookies-from-browser" and i + 1 < len(parts):
+            browser = parts[i + 1]
+            ok(
+                f"{prefix}: cookies from browser {browser!r} "
+                "(extraction tested only at run time)"
+            )
+            i += 2
+            continue
+        i += 1
 
 
 def stub_command(command: str, note: str):

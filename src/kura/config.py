@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,8 +70,7 @@ def parse_duration(value: str) -> int:
     ConfigError
         When *value* is not a valid ``Nd`` or ``Nh`` string.
     """
-    import re as _re
-    m = _re.fullmatch(r"(\d+)([dh])", value.strip())
+    m = re.fullmatch(r"(\d+)([dh])", value.strip())
     if not m:
         raise ConfigError(
             f"invalid duration {value!r}: must be a positive integer followed by 'd' or 'h' (e.g. '7d', '12h')"
@@ -129,6 +129,7 @@ def config_from_data(data: Any, config_dir: Path | None = None) -> Config:
         "schedule": DEFAULT_SCHEDULE,
         "update_strategy": DEFAULT_UPDATE_STRATEGY,
         "full_reindex_every": DEFAULT_FULL_REINDEX_EVERY,
+        "concurrency": 1,
     }
     defaults.update(data.get("defaults") or {})
 
@@ -137,6 +138,19 @@ def config_from_data(data: Any, config_dir: Path | None = None) -> Config:
         parse_duration(str(defaults["full_reindex_every"]))
     except ConfigError as exc:
         raise ConfigError(f"defaults.full_reindex_every: {exc}") from exc
+
+    # Validate concurrency.
+    try:
+        concurrency = int(defaults["concurrency"])
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"defaults.concurrency: must be an integer between 1 and 8, got {defaults['concurrency']!r}"
+        )
+    if not (1 <= concurrency <= 8):
+        raise ConfigError(
+            f"defaults.concurrency: must be between 1 and 8, got {concurrency}"
+        )
+    defaults["concurrency"] = concurrency
 
     sources_data = data.get("sources") or []
     if not isinstance(sources_data, list):

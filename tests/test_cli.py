@@ -79,8 +79,11 @@ def test_add_and_list_end_to_end(monkeypatch, tmp_path: Path, capsys) -> None:
     assert "/archive/test-channel" in output
 
 
-def test_stub_exits_2(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_doctor_without_config_reports_fail(monkeypatch, tmp_path: Path, capsys) -> None:
     set_kura_dirs(monkeypatch, tmp_path)
 
-    assert main(["doctor"]) == 2
-    assert "not implemented yet" in capsys.readouterr().out
+    # doctor exits 1 when config.yaml is missing (FAIL emitted)
+    rc = main(["doctor"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL" in out

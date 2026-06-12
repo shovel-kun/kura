@@ -186,21 +186,35 @@ def _is_promotion_due(last_full_run_at: str | None, interval_secs: int) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def run_source(source: Source, config_dir: Path, state_dir: Path) -> int | None:
+def run_source(
+    source: Source,
+    config_dir: Path,
+    state_dir: Path,
+    *,
+    quiet: bool = False,
+) -> int | None:
     """Execute yt-dlp for *source*, stream output, and persist run state.
 
     Returns the raw yt-dlp exit code, or *None* if the source lock was
     already held by another process (concurrent run).  The CLI caller maps
     *None* to exit 0 (overlapping timer tick is normal, not an error).
+
+    Parameters
+    ----------
+    quiet:
+        When *True*, suppress per-line console streaming (log file still
+        receives all output).  Only the start and end summary lines are
+        printed.  Used by concurrent multi-source runs to avoid interleaved
+        output.
     """
     with source_lock(source.name, state_dir) as acquired:
         if not acquired:
             print(f"skipped: {source.name} is already running")
             return None
-        return _run_source_locked(source, config_dir, state_dir)
+        return _run_source_locked(source, config_dir, state_dir, quiet=quiet)
 
 
-def _run_source_locked(source: Source, config_dir: Path, state_dir: Path) -> int:
+def _run_source_locked(source: Source, config_dir: Path, state_dir: Path, *, quiet: bool = False) -> int:
     """Inner implementation of run_source; called with the lock already held."""
     # 1. Ensure directories exist.
     source.output_dir.mkdir(parents=True, exist_ok=True)
@@ -265,6 +279,8 @@ def _run_source_locked(source: Source, config_dir: Path, state_dir: Path) -> int
 
     # 9. Open log file and write header.
     output_lines: list[str] = []
+    if quiet:
+        print(f"{source.name}: started")
     with log_path.open("w", encoding="utf-8") as log_file:
         header = shlex.join(cmd) + f"  started_at={started_at.isoformat()}"
         log_file.write(header + "\n")
@@ -282,7 +298,8 @@ def _run_source_locked(source: Source, config_dir: Path, state_dir: Path) -> int
         for line in proc.stdout:
             log_file.write(line)
             log_file.flush()
-            print(line, end="", flush=True)
+            if not quiet:
+                print(line, end="", flush=True)
             output_lines.append(line)
         proc.wait()
 

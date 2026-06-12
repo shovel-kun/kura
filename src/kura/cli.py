@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import sys
 
 from .commands import (
     add_command,
+    doctor_command,
     handle_config_error,
     import_command,
     init_command,
     list_command,
+    logs_command,
     pause_command,
     resume_command,
     run_command,
     status_command,
-    stub_command,
     suppress_command,
     unsuppress_command,
     verify_command,
@@ -23,6 +25,15 @@ from .config import ConfigError
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kura")
+    try:
+        _version = importlib.metadata.version("kura")
+    except importlib.metadata.PackageNotFoundError:
+        _version = "unknown"
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"kura {_version}",
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subcommands.add_parser("init", help="create config, profile, and state database")
@@ -104,13 +115,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     unsuppress_parser.set_defaults(func=unsuppress_command)
 
-    stubs = {
-        "logs": "a later release",
-        "doctor": "a later release",
-    }
-    for command, note in stubs.items():
-        stub_parser = subcommands.add_parser(command)
-        stub_parser.set_defaults(func=stub_command(command, note))
+    logs_parser = subcommands.add_parser(
+        "logs",
+        help="print recent log lines for the latest run of a source",
+    )
+    logs_parser.add_argument("name", help="source name as defined in config.yaml")
+    logs_parser.add_argument(
+        "-n",
+        type=int,
+        default=50,
+        metavar="N",
+        help="number of lines to show (default: 50)",
+    )
+    logs_parser.add_argument(
+        "--path",
+        action="store_true",
+        help="print only the absolute path of the latest log file",
+    )
+    logs_parser.set_defaults(func=logs_command)
+
+    doctor_parser = subcommands.add_parser(
+        "doctor",
+        help="run health checks and report any problems",
+    )
+    doctor_parser.set_defaults(func=doctor_command)
 
     return parser
 
