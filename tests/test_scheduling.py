@@ -41,16 +41,16 @@ def make_two_source_config(config_dir: Path, out1: Path, out2: Path) -> None:
         f"""defaults:
   profile: av1-archive
   schedule: "0 */6 * * *"
-  update_strategy: quick
+  update_strategy: full
   full_reindex_every: 7d
 sources:
   - name: src-a
-    url: https://example.com/a
+    url: https://www.youtube.com/@TestChannelA
     output_dir: {out1}
     extra_args: []
     enabled: true
   - name: src-b
-    url: https://example.com/b
+    url: https://www.youtube.com/@TestChannelB
     output_dir: {out2}
     extra_args: []
     enabled: true
@@ -64,11 +64,11 @@ def make_one_source_config(config_dir: Path, out: Path, *, enabled: bool = True)
         f"""defaults:
   profile: av1-archive
   schedule: "0 */6 * * *"
-  update_strategy: quick
+  update_strategy: full
   full_reindex_every: 7d
 sources:
   - name: test-src
-    url: https://example.com/channel
+    url: https://www.youtube.com/@TestChannel
     output_dir: {out}
     extra_args: []
     enabled: {str(enabled).lower()}

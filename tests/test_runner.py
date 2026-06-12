@@ -39,11 +39,11 @@ def make_config(config_dir: Path, output_dir: Path) -> None:
         f"""defaults:
   profile: av1-archive
   schedule: "0 */6 * * *"
-  update_strategy: quick
+  update_strategy: full
   full_reindex_every: 7d
 sources:
   - name: test-src
-    url: https://example.com/channel
+    url: https://www.youtube.com/@TestChannel
     output_dir: {output_dir}
     extra_args: []
     enabled: true
@@ -65,7 +65,8 @@ def make_source(
         profile="av1-archive",
         cookies=cookies,
         schedule="0 */6 * * *",
-        update_strategy="quick",
+        update_strategy="full",
+        full_reindex_every="7d",
         extra_args=extra_args or [],
         enabled=True,
     )

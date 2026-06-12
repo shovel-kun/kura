@@ -62,6 +62,49 @@ def read_archive(path: Path) -> set[str]:
     return lines
 
 
+def remove_archive_entry(path: Path, entry: str) -> None:
+    """Remove exactly *entry* from the archive file at *path* atomically.
+
+    A timestamped backup is written before any modification.
+
+    Raises
+    ------
+    FileNotFoundError
+        When *path* does not exist.
+    ValueError
+        When *entry* is not found in the archive file.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"archive file not found: {path}")
+
+    existing_content = path.read_text(encoding="utf-8")
+    lines = existing_content.splitlines(keepends=True)
+
+    # Normalise entry for comparison (strip whitespace).
+    normalised = entry.strip()
+    new_lines = [line for line in lines if line.strip() != normalised]
+
+    if len(new_lines) == len(lines):
+        raise ValueError(f"entry not found in archive: {entry!r}")
+
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    backup_path = path.parent / f"{path.name}.bak.{timestamp}"
+    backup_path.write_text(existing_content, encoding="utf-8")
+
+    new_content = "".join(new_lines)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            tmp.write(new_content)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def append_archive_entries(path: Path, entries: list[str]) -> None:
     """Append *entries* to the archive file at *path* atomically.
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from croniter import croniter
 
 from . import paths, state
-from .archive import MEDIA_EXTENSIONS, append_archive_entries, archive_key, read_archive
+from .archive import MEDIA_EXTENSIONS, append_archive_entries, archive_key, read_archive, remove_archive_entry
 from .config import (
     DEFAULT_CONFIG_TEXT,
     DEFAULT_PROFILE_TEXT,
@@ -414,8 +414,10 @@ def verify_command(args) -> int:
     return 1
 
 
-def status_command(_args) -> int:
-    """Print a summary table of all sources with last-run state."""
+def status_command(args) -> int:
+    """Print a summary table of all sources, or detailed view for one source."""
+    name: str | None = getattr(args, "name", None)
+
     try:
         config = load_config()
     except ConfigError as error:
@@ -428,18 +430,32 @@ def status_command(_args) -> int:
     except Exception:
         db = None
 
-    def query_source_state(name: str) -> dict:
+    if name is not None:
+        # Detailed single-source view.
+        source = next((s for s in config.sources if s.name == name), None)
+        if source is None:
+            known = ", ".join(s.name for s in config.sources)
+            print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+            if db is not None:
+                db.close()
+            return 1
+        rc = _status_detail(name, db)
+        if db is not None:
+            db.close()
+        return rc
+
+    def query_source_state(src_name: str) -> dict:
         if db is None:
             return {}
         row = db.execute(
             "SELECT last_check_at, imported_at FROM source_state WHERE source = ?",
-            (name,),
+            (src_name,),
         ).fetchone()
         if row is None:
             return {}
         return {"last_check_at": row[0], "imported_at": row[1]}
 
-    def query_last_run(name: str) -> dict:
+    def query_last_run(src_name: str) -> dict:
         if db is None:
             return {}
         row = db.execute(
@@ -448,18 +464,32 @@ def status_command(_args) -> int:
             FROM runs WHERE source = ?
             ORDER BY id DESC LIMIT 1
             """,
-            (name,),
+            (src_name,),
         ).fetchone()
         if row is None:
             return {}
         return {"ended_at": row[0], "exit_code": row[1], "new_count": row[2]}
 
-    header = ("name", "enabled", "imported", "last_run", "exit", "new", "next_due")
+    def query_permanent_fails(src_name: str) -> int:
+        if db is None:
+            return 0
+        row = db.execute(
+            """
+            SELECT count(*) FROM video_failures
+            WHERE source = ? AND kind = 'permanent' AND attempts >= 3
+            """,
+            (src_name,),
+        ).fetchone()
+        return row[0] if row else 0
+
+    header = ("name", "enabled", "imported", "last_run", "exit", "new", "fails", "next_due")
     rows: list[tuple[str, ...]] = [header]
 
+    any_permanent = False
     for source in config.sources:
         ss = query_source_state(source.name)
         lr = query_last_run(source.name)
+        pf = query_permanent_fails(source.name)
 
         enabled_str = "yes" if source.enabled else "no"
         imported_str = "yes" if ss.get("imported_at") else "no"
@@ -471,6 +501,10 @@ def status_command(_args) -> int:
             last_run_str = lr["ended_at"][:16].replace("T", " ")
             exit_str = str(lr["exit_code"])
             new_str = str(lr["new_count"])
+
+        fails_str = str(pf) if pf > 0 else "-"
+        if pf > 0:
+            any_permanent = True
 
         last_check_at = ss.get("last_check_at")
         if last_check_at:
@@ -489,6 +523,7 @@ def status_command(_args) -> int:
             last_run_str,
             exit_str,
             new_str,
+            fails_str,
             next_due_str,
         ))
 
@@ -500,6 +535,99 @@ def status_command(_args) -> int:
         print("  ".join(cell.ljust(widths[col]) for col, cell in enumerate(row)).rstrip())
         if index == 0:
             print("  ".join("-" * w for w in widths).rstrip())
+
+    if any_permanent:
+        print()
+        print("permanent failures detected; inspect with `kura status NAME` and consider `kura suppress`")
+
+    return 0
+
+
+def _status_detail(name: str, db) -> int:
+    """Print detailed view for a single source."""
+    print(f"source: {name}")
+    print()
+
+    # Last 5 runs.
+    if db is not None:
+        runs = db.execute(
+            """
+            SELECT started_at, exit_code, new_count, failure_summary
+            FROM runs WHERE source = ?
+            ORDER BY id DESC LIMIT 5
+            """,
+            (name,),
+        ).fetchall()
+    else:
+        runs = []
+
+    print("recent runs:")
+    if runs:
+        run_header = ("time", "exit", "new", "failures")
+        run_rows: list[tuple[str, ...]] = [run_header]
+        for r in runs:
+            started = (r[0] or "")[:16].replace("T", " ")
+            run_rows.append((
+                started,
+                str(r[1]) if r[1] is not None else "-",
+                str(r[2]) if r[2] is not None else "-",
+                r[3] or "-",
+            ))
+        widths = [max(len(row[i]) for row in run_rows) for i in range(len(run_header))]
+        for idx, row in enumerate(run_rows):
+            print("  " + "  ".join(cell.ljust(widths[col]) for col, cell in enumerate(row)).rstrip())
+            if idx == 0:
+                print("  " + "  ".join("-" * w for w in widths).rstrip())
+    else:
+        print("  (no runs yet)")
+
+    print()
+
+    # Permanent failures.
+    if db is not None:
+        failures = db.execute(
+            """
+            SELECT video_id, attempts, last_error
+            FROM video_failures
+            WHERE source = ? AND kind = 'permanent'
+            ORDER BY attempts DESC, video_id
+            """,
+            (name,),
+        ).fetchall()
+    else:
+        failures = []
+
+    print("permanent failures:")
+    if failures:
+        for vid_id, attempts, last_error in failures:
+            trunc = (last_error or "")[:80]
+            print(f"  {vid_id}  attempts={attempts}  {trunc}")
+    else:
+        print("  (none)")
+
+    print()
+
+    # Suppressions.
+    if db is not None:
+        suppressions = db.execute(
+            """
+            SELECT archive_key, suppressed_at, reason
+            FROM suppressions WHERE source = ?
+            ORDER BY suppressed_at
+            """,
+            (name,),
+        ).fetchall()
+    else:
+        suppressions = []
+
+    print("suppressions:")
+    if suppressions:
+        for key, suppressed_at, reason in suppressions:
+            ts = (suppressed_at or "")[:16].replace("T", " ")
+            reason_str = f"  ({reason})" if reason else ""
+            print(f"  {key}  {ts}{reason_str}")
+    else:
+        print("  (none)")
 
     return 0
 
@@ -549,6 +677,134 @@ def resume_command(args) -> int:
         print(f"{name}: disabled → enabled")
     else:
         print(f"{name}: already enabled")
+    return 0
+
+
+def suppress_command(args) -> int:
+    """Append a video to the archive (suppressing future downloads) and record suppression."""
+    source_name: str = args.name
+    video_id: str = args.video_id
+    reason: str | None = getattr(args, "reason", None)
+    extractor: str = getattr(args, "extractor", "youtube") or "youtube"
+
+    # Validate video_id: non-empty, no spaces.
+    if not video_id or " " in video_id:
+        print(f"error: invalid video_id {video_id!r}: must be non-empty and contain no spaces")
+        return 1
+
+    try:
+        config = load_config()
+    except ConfigError as error:
+        print(f"error: {error}")
+        return 1
+
+    source = next((s for s in config.sources if s.name == source_name), None)
+    if source is None:
+        known = ", ".join(s.name for s in config.sources)
+        print(f"error: unknown source {source_name!r}" + (f"; known: {known}" if known else ""))
+        return 1
+
+    db_path = paths.state_db()
+    state.init_db(db_path)
+
+    with source_lock(source_name, paths.state_dir()) as acquired:
+        if not acquired:
+            print(f"error: {source_name} is currently running; cannot suppress while lock is held")
+            return 1
+
+        archive_entry = f"{extractor} {video_id}"
+        archive_path = source.archive_file
+
+        # Check if already present.
+        existing = read_archive(archive_path)
+        if archive_entry in existing:
+            print(f"warning: {archive_entry!r} is already in the archive; skipping append")
+        else:
+            append_archive_entries(archive_path, [archive_entry])
+
+        # Insert/update suppressions row.
+        suppressed_at = datetime.now(tz=timezone.utc).isoformat()
+        with state.connect(db_path) as db:
+            db.execute(
+                """
+                INSERT INTO suppressions (source, archive_key, suppressed_at, reason)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(source, archive_key) DO UPDATE SET
+                    suppressed_at = excluded.suppressed_at,
+                    reason        = excluded.reason
+                """,
+                (source_name, archive_entry, suppressed_at, reason),
+            )
+            # Remove video_failures row if present.
+            db.execute(
+                "DELETE FROM video_failures WHERE source = ? AND video_id = ?",
+                (source_name, video_id),
+            )
+
+    print(f"suppressed: {archive_entry}")
+    return 0
+
+
+def unsuppress_command(args) -> int:
+    """Remove a suppressed video from the archive and delete the suppression record."""
+    source_name: str = args.name
+    video_id: str = args.video_id
+    extractor: str = getattr(args, "extractor", "youtube") or "youtube"
+
+    try:
+        config = load_config()
+    except ConfigError as error:
+        print(f"error: {error}")
+        return 1
+
+    source = next((s for s in config.sources if s.name == source_name), None)
+    if source is None:
+        known = ", ".join(s.name for s in config.sources)
+        print(f"error: unknown source {source_name!r}" + (f"; known: {known}" if known else ""))
+        return 1
+
+    archive_entry = f"{extractor} {video_id}"
+    db_path = paths.state_db()
+    state.init_db(db_path)
+
+    # Require a matching suppressions row (kura only removes lines IT added).
+    with state.connect(db_path) as db:
+        row = db.execute(
+            "SELECT archive_key FROM suppressions WHERE source = ? AND archive_key = ?",
+            (source_name, archive_entry),
+        ).fetchone()
+
+    if row is None:
+        print(
+            f"error: no suppression record for {archive_entry!r} in source {source_name!r}; "
+            "kura can only unsuppress entries it added"
+        )
+        return 1
+
+    with source_lock(source_name, paths.state_dir()) as acquired:
+        if not acquired:
+            print(f"error: {source_name} is currently running; cannot unsuppress while lock is held")
+            return 1
+
+        # Remove the line from the archive file.
+        archive_path = source.archive_file
+        try:
+            remove_archive_entry(archive_path, archive_entry)
+        except FileNotFoundError:
+            print(f"error: archive file not found: {archive_path}")
+            return 1
+        except ValueError:
+            print(f"error: {archive_entry!r} not found in archive; it may have been removed already")
+            return 1
+
+        # Delete suppressions row.
+        with state.connect(db_path) as db:
+            db.execute(
+                "DELETE FROM suppressions WHERE source = ? AND archive_key = ?",
+                (source_name, archive_entry),
+            )
+
+    print(f"unsuppressed: {archive_entry}")
     return 0
 
 

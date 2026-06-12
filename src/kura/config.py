@@ -36,6 +36,7 @@ DEFAULT_PROFILE_TEXT = """--continue
 --embed-chapters
 --embed-metadata
 --prefer-free-formats
+--no-write-playlist-metafiles
 --output "%(title)s [%(id)s]/%(title)s [%(id)s].%(ext)s"
 --trim-filenames 200
 --match-filter "live_status != 'is_live' & live_status != 'is_upcoming' & live_status != 'post_live'"
@@ -58,6 +59,29 @@ class ConfigError(ValueError):
     pass
 
 
+def parse_duration(value: str) -> int:
+    """Parse a duration string like ``'7d'`` or ``'12h'`` into seconds.
+
+    Supported units: ``d`` (days) and ``h`` (hours).
+
+    Raises
+    ------
+    ConfigError
+        When *value* is not a valid ``Nd`` or ``Nh`` string.
+    """
+    import re as _re
+    m = _re.fullmatch(r"(\d+)([dh])", value.strip())
+    if not m:
+        raise ConfigError(
+            f"invalid duration {value!r}: must be a positive integer followed by 'd' or 'h' (e.g. '7d', '12h')"
+        )
+    amount = int(m.group(1))
+    unit = m.group(2)
+    if unit == "d":
+        return amount * 86400
+    return amount * 3600
+
+
 @dataclass(frozen=True)
 class Source:
     name: str
@@ -68,6 +92,7 @@ class Source:
     cookies: str | None
     schedule: str
     update_strategy: str
+    full_reindex_every: str
     extra_args: list[str]
     enabled: bool
 
@@ -106,6 +131,12 @@ def config_from_data(data: Any, config_dir: Path | None = None) -> Config:
         "full_reindex_every": DEFAULT_FULL_REINDEX_EVERY,
     }
     defaults.update(data.get("defaults") or {})
+
+    # Validate full_reindex_every format at load time.
+    try:
+        parse_duration(str(defaults["full_reindex_every"]))
+    except ConfigError as exc:
+        raise ConfigError(f"defaults.full_reindex_every: {exc}") from exc
 
     sources_data = data.get("sources") or []
     if not isinstance(sources_data, list):
@@ -213,8 +244,18 @@ def _source_from_mapping(item: dict[str, Any], defaults: dict[str, Any], config_
     update_strategy = str(item.get("update_strategy") or defaults["update_strategy"])
     if update_strategy not in VALID_UPDATE_STRATEGIES:
         raise ConfigError(f"source {name!r}: invalid update_strategy {update_strategy!r}")
-    if update_strategy == "rss" and not is_youtube_channel_url(str(url)):
-        raise ConfigError(f"source {name!r}: rss update_strategy requires a YouTube channel URL")
+    if update_strategy in ("rss", "quick") and not is_youtube_channel_url(str(url)):
+        raise ConfigError(
+            f"source {name!r}: {update_strategy} update_strategy requires a YouTube channel URL"
+        )
+
+    # Per-source full_reindex_every (falls back to defaults).
+    full_reindex_every_raw = item.get("full_reindex_every") or defaults["full_reindex_every"]
+    full_reindex_every = str(full_reindex_every_raw)
+    try:
+        parse_duration(full_reindex_every)
+    except ConfigError as exc:
+        raise ConfigError(f"source {name!r}: full_reindex_every: {exc}") from exc
 
     extra_args = item.get("extra_args", [])
     if extra_args is None:
@@ -236,6 +277,7 @@ def _source_from_mapping(item: dict[str, Any], defaults: dict[str, Any], config_
         cookies=str(cookies) if cookies is not None else None,
         schedule=schedule,
         update_strategy=update_strategy,
+        full_reindex_every=full_reindex_every,
         extra_args=list(extra_args),
         enabled=enabled,
     )

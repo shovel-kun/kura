@@ -14,6 +14,8 @@ from .commands import (
     run_command,
     status_command,
     stub_command,
+    suppress_command,
+    unsuppress_command,
     verify_command,
 )
 from .config import ConfigError
@@ -65,6 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.set_defaults(func=verify_command)
 
     status_parser = subcommands.add_parser("status", help="show source status summary")
+    status_parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="source name for detailed view (optional)",
+    )
     status_parser.set_defaults(func=status_command)
 
     pause_parser = subcommands.add_parser("pause", help="disable a source (pause scheduling)")
@@ -75,10 +83,29 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("name", help="source name as defined in config.yaml")
     resume_parser.set_defaults(func=resume_command)
 
+    suppress_parser = subcommands.add_parser(
+        "suppress", help="add a video to the archive to suppress future downloads"
+    )
+    suppress_parser.add_argument("name", help="source name as defined in config.yaml")
+    suppress_parser.add_argument("video_id", help="video ID to suppress")
+    suppress_parser.add_argument("--reason", default=None, help="optional reason for suppression")
+    suppress_parser.add_argument(
+        "--extractor", default="youtube", help="extractor name (default: youtube)"
+    )
+    suppress_parser.set_defaults(func=suppress_command)
+
+    unsuppress_parser = subcommands.add_parser(
+        "unsuppress", help="remove a suppressed video from the archive"
+    )
+    unsuppress_parser.add_argument("name", help="source name as defined in config.yaml")
+    unsuppress_parser.add_argument("video_id", help="video ID to unsuppress")
+    unsuppress_parser.add_argument(
+        "--extractor", default="youtube", help="extractor name (default: youtube)"
+    )
+    unsuppress_parser.set_defaults(func=unsuppress_command)
+
     stubs = {
         "logs": "a later release",
-        "suppress": "a future release",
-        "unsuppress": "a future release",
         "doctor": "a later release",
     }
     for command, note in stubs.items():
