@@ -257,6 +257,42 @@ def is_youtube_channel_url(url: str) -> bool:
     )
 
 
+def set_source_enabled(name: str, *, enabled: bool, config_path: Path | None = None) -> None:
+    """Flip the ``enabled`` flag for *name* in config.yaml, preserving comments.
+
+    Parameters
+    ----------
+    name:
+        The source name to update.
+    enabled:
+        The new value for the ``enabled`` field.
+    config_path:
+        Path to config.yaml; defaults to ``paths.config_file()``.
+
+    Raises
+    ------
+    ConfigError
+        If the config file is not found or *name* is not a known source.
+    """
+    config_path = config_path or paths.config_file()
+    if not config_path.exists():
+        raise ConfigError(f"config file not found: {config_path}; run `kura init` first")
+
+    yaml = make_yaml()
+    data = yaml.load(config_path.read_text()) or CommentedMap()
+    if not isinstance(data, CommentedMap):
+        raise ConfigError("config.yaml must contain a mapping")
+
+    sources_seq = data.get("sources") or []
+    for item in sources_seq:
+        if isinstance(item, dict) and item.get("name") == name:
+            item["enabled"] = enabled
+            _atomic_yaml_dump(yaml, data, config_path)
+            return
+
+    raise ConfigError(f"source {name!r}: not found in config")
+
+
 def _atomic_yaml_dump(yaml: YAML, data: Any, path: Path) -> None:
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:

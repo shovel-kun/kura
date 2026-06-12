@@ -9,6 +9,8 @@ from .commands import (
     import_command,
     init_command,
     list_command,
+    pause_command,
+    resume_command,
     run_command,
     status_command,
     stub_command,
@@ -42,9 +44,21 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--dry-run", action="store_true", help="report only, write nothing")
     import_parser.set_defaults(func=import_command)
 
+    # run: three mutually exclusive modes:
+    #   kura run NAME [--force]
+    #   kura run --due
+    #   kura run --all
     run_parser = subcommands.add_parser("run", help="run yt-dlp for a source")
-    run_parser.add_argument("name", help="source name as defined in config.yaml")
-    run_parser.set_defaults(func=run_command)
+    run_mode = run_parser.add_mutually_exclusive_group()
+    run_mode.add_argument("name", nargs="?", default=None, help="source name as defined in config.yaml")
+    run_mode.add_argument("--due", action="store_true", help="run all enabled sources whose cron schedule has elapsed")
+    run_mode.add_argument("--all", action="store_true", dest="all", help="run all enabled sources regardless of schedule")
+    run_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="run the named source even if it is disabled (only valid with NAME)",
+    )
+    run_parser.set_defaults(func=_run_command_wrapper)
 
     verify_parser = subcommands.add_parser("verify", help="dry-run yt-dlp to report pending downloads")
     verify_parser.add_argument("name", help="source name as defined in config.yaml")
@@ -53,10 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subcommands.add_parser("status", help="show source status summary")
     status_parser.set_defaults(func=status_command)
 
+    pause_parser = subcommands.add_parser("pause", help="disable a source (pause scheduling)")
+    pause_parser.add_argument("name", help="source name as defined in config.yaml")
+    pause_parser.set_defaults(func=pause_command)
+
+    resume_parser = subcommands.add_parser("resume", help="enable a source (resume scheduling)")
+    resume_parser.add_argument("name", help="source name as defined in config.yaml")
+    resume_parser.set_defaults(func=resume_command)
+
     stubs = {
         "logs": "a later release",
-        "pause": "a future release",
-        "resume": "a future release",
         "suppress": "a future release",
         "unsuppress": "a future release",
         "doctor": "a later release",
@@ -66,6 +86,24 @@ def build_parser() -> argparse.ArgumentParser:
         stub_parser.set_defaults(func=stub_command(command, note))
 
     return parser
+
+
+def _run_command_wrapper(args) -> int:
+    """Validate run-mode flag combinations then delegate to run_command."""
+    force: bool = args.force
+    due: bool = args.due
+    all_mode: bool = args.all
+    name: str | None = args.name
+
+    if force and (due or all_mode):
+        print("error: --force cannot be combined with --due or --all")
+        return 2
+
+    if name is None and not due and not all_mode:
+        print("error: specify a source name, --due, or --all")
+        return 2
+
+    return run_command(args)
 
 
 def main(argv: list[str] | None = None) -> int:

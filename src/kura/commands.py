@@ -12,7 +12,15 @@ from croniter import croniter
 
 from . import paths, state
 from .archive import MEDIA_EXTENSIONS, append_archive_entries, archive_key, read_archive
-from .config import DEFAULT_CONFIG_TEXT, DEFAULT_PROFILE_TEXT, ConfigError, append_source, load_config
+from .config import (
+    DEFAULT_CONFIG_TEXT,
+    DEFAULT_PROFILE_TEXT,
+    ConfigError,
+    append_source,
+    load_config,
+    set_source_enabled,
+)
+from .locks import source_lock
 from .runner import build_command, run_source
 
 
@@ -39,6 +47,8 @@ WantedBy=timers.target
 Enable it with:
 systemctl --user enable --now kura.timer
 loginctl enable-linger $USER
+
+Unit files are also shipped in contrib/systemd/ inside the kura source tree.
 """
 
 
@@ -124,6 +134,15 @@ def import_command(args) -> int:
         print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
         return 1
 
+    # Acquire lock to prevent concurrent run-vs-import on the same archive.
+    with source_lock(name, paths.state_dir()) as acquired:
+        if not acquired:
+            print(f"skipped: {name} is already running; import aborted to avoid archive corruption")
+            return 1
+        return _import_locked(source, name, dry_run)
+
+
+def _import_locked(source, name: str, dry_run: bool) -> int:
     archive_path = source.archive_file
     archive_set = read_archive(archive_path)
 
@@ -245,24 +264,113 @@ def import_command(args) -> int:
     return 0
 
 
-def run_command(args) -> int:
-    """Run yt-dlp for a named source and persist the result."""
-    name: str = args.name
+def compute_next_due(schedule: str, last_check_at: str | None, now: datetime | None = None) -> datetime:
+    """Return the next scheduled datetime after *last_check_at*.
 
+    Parameters
+    ----------
+    schedule:
+        A valid cron expression.
+    last_check_at:
+        ISO-8601 timestamp string of the last check, or *None* if the source
+        has never been run (treated as immediately due).
+    now:
+        The current time for due-ness comparison; defaults to
+        ``datetime.now(timezone.utc)``.  Pass an explicit value in tests.
+    """
+    if now is None:
+        now = datetime.now(tz=timezone.utc)
+    if last_check_at is None:
+        # Never run → return a sentinel that is always in the past.
+        return now.replace(year=1970)
+    base_dt = datetime.fromisoformat(last_check_at)
+    return croniter(schedule, base_dt).get_next(datetime)
+
+
+def is_source_due(schedule: str, last_check_at: str | None, now: datetime | None = None) -> bool:
+    """Return True iff the source's next scheduled run is <= *now*."""
+    if now is None:
+        now = datetime.now(tz=timezone.utc)
+    if last_check_at is None:
+        return True
+    next_dt = compute_next_due(schedule, last_check_at, now)
+    return next_dt <= now
+
+
+def _query_last_check_at(db_path: Path, name: str) -> str | None:
+    """Return the last_check_at value for *name*, or None."""
+    if not db_path.exists():
+        return None
+    try:
+        with state.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT last_check_at FROM source_state WHERE source = ?",
+                (name,),
+            ).fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def run_command(args) -> int:
+    """Run yt-dlp for a named source (or all/due sources) and persist the result."""
     try:
         config = load_config()
     except ConfigError as error:
         print(f"error: {error}")
         return 1
 
-    source = next((s for s in config.sources if s.name == name), None)
-    if source is None:
-        known = ", ".join(s.name for s in config.sources)
-        print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
-        return 1
+    db_path = paths.state_db()
 
-    exit_code = run_source(source, paths.config_dir(), paths.state_dir())
-    return 0 if exit_code == 0 else 1
+    force: bool = getattr(args, "force", False)
+
+    # --- kura run NAME [--force] ---
+    if args.name is not None:
+        name: str = args.name
+        source = next((s for s in config.sources if s.name == name), None)
+        if source is None:
+            known = ", ".join(s.name for s in config.sources)
+            print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+            return 1
+
+        if not source.enabled and not force:
+            print(f"error: source {name!r} is disabled; use --force to run it anyway")
+            return 1
+
+        exit_code = run_source(source, paths.config_dir(), paths.state_dir())
+        if exit_code is None:
+            return 0  # locked → skip is not an error
+        return 0 if exit_code in (0, 101) else 1
+
+    # --- kura run --due / --all ---
+    due_mode: bool = getattr(args, "due", False)
+    all_mode: bool = getattr(args, "all", False)
+
+    now = datetime.now(tz=timezone.utc)
+    any_failure = False
+
+    for source in config.sources:
+        if not source.enabled:
+            print(f"  {source.name}: disabled")
+            continue
+
+        if due_mode:
+            last_check_at = _query_last_check_at(db_path, source.name)
+            if not is_source_due(source.schedule, last_check_at, now):
+                next_dt = compute_next_due(source.schedule, last_check_at, now)
+                print(f"  {source.name}: not due (next {next_dt.strftime('%Y-%m-%d %H:%M')} UTC)")
+                continue
+
+        exit_code = run_source(source, paths.config_dir(), paths.state_dir())
+        if exit_code is None:
+            print(f"  {source.name}: skipped (already running)")
+        elif exit_code in (0, 101):
+            print(f"  {source.name}: ran (exit={exit_code})")
+        else:
+            print(f"  {source.name}: failed (exit={exit_code})")
+            any_failure = True
+
+    return 1 if any_failure else 0
 
 
 def verify_command(args) -> int:
@@ -367,9 +475,7 @@ def status_command(_args) -> int:
         last_check_at = ss.get("last_check_at")
         if last_check_at:
             try:
-                base_dt = datetime.fromisoformat(last_check_at)
-                cron = croniter(source.schedule, base_dt)
-                next_dt = cron.get_next(datetime)
+                next_dt = compute_next_due(source.schedule, last_check_at)
                 next_due_str = next_dt.strftime("%Y-%m-%d %H:%M")
             except Exception:
                 next_due_str = "now"
@@ -395,6 +501,54 @@ def status_command(_args) -> int:
         if index == 0:
             print("  ".join("-" * w for w in widths).rstrip())
 
+    return 0
+
+
+def pause_command(args) -> int:
+    """Disable a source in config.yaml (pause scheduling)."""
+    name: str = args.name
+    try:
+        config = load_config()
+    except ConfigError as error:
+        print(f"error: {error}")
+        return 1
+
+    source = next((s for s in config.sources if s.name == name), None)
+    if source is None:
+        known = ", ".join(s.name for s in config.sources)
+        print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+        return 1
+
+    was = source.enabled
+    set_source_enabled(name, enabled=False, config_path=paths.config_file())
+    if was:
+        print(f"{name}: enabled → disabled")
+    else:
+        print(f"{name}: already disabled")
+    return 0
+
+
+def resume_command(args) -> int:
+    """Enable a source in config.yaml (resume scheduling)."""
+    name: str = args.name
+    try:
+        config = load_config()
+    except ConfigError as error:
+        print(f"error: {error}")
+        return 1
+
+    source = next((s for s in config.sources if s.name == name), None)
+    if source is None:
+        known = ", ".join(s.name for s in config.sources)
+        print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+        return 1
+
+    was = source.enabled
+    set_source_enabled(name, enabled=True, config_path=paths.config_file())
+    if not was:
+        print(f"{name}: disabled → enabled")
+    else:
+        print(f"{name}: already enabled")
     return 0
 
 

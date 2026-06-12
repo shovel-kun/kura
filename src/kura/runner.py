@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import archive, paths, state
 from .config import Source
+from .locks import source_lock
 
 
 def build_command(
@@ -54,12 +55,22 @@ def build_command(
     return cmd
 
 
-def run_source(source: Source, config_dir: Path, state_dir: Path) -> int:
+def run_source(source: Source, config_dir: Path, state_dir: Path) -> int | None:
     """Execute yt-dlp for *source*, stream output, and persist run state.
 
-    Returns the raw yt-dlp exit code.  The CLI caller is expected to do
-    ``sys.exit(min(1, exit_code))`` so it never propagates codes > 1.
+    Returns the raw yt-dlp exit code, or *None* if the source lock was
+    already held by another process (concurrent run).  The CLI caller maps
+    *None* to exit 0 (overlapping timer tick is normal, not an error).
     """
+    with source_lock(source.name, state_dir) as acquired:
+        if not acquired:
+            print(f"skipped: {source.name} is already running")
+            return None
+        return _run_source_locked(source, config_dir, state_dir)
+
+
+def _run_source_locked(source: Source, config_dir: Path, state_dir: Path) -> int:
+    """Inner implementation of run_source; called with the lock already held."""
     # 1. Ensure directories exist.
     source.output_dir.mkdir(parents=True, exist_ok=True)
     log_source_dir = paths.logs_dir(state_dir) / source.name

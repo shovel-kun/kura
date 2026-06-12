@@ -1,0 +1,8 @@
+[Unit]
+Description=kura archive check
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/kura run --due
+Nice=10
+IOSchedulingClass=idle
