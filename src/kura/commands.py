@@ -560,6 +560,47 @@ def _print_verify_result(name: str, lines: list[str]) -> None:
         print(ui.dim(f"  … and {count - 20} more"))
 
 
+def query_source_state(db: sqlite3.Connection | None, name: str) -> dict:
+    if db is None:
+        return {}
+    row = db.execute(
+        "SELECT last_check_at, imported_at FROM source_state WHERE source = ?",
+        (name,),
+    ).fetchone()
+    if row is None:
+        return {}
+    return {"last_check_at": row[0], "imported_at": row[1]}
+
+
+def query_last_run(db: sqlite3.Connection | None, name: str) -> dict:
+    if db is None:
+        return {}
+    row = db.execute(
+        """
+        SELECT ended_at, exit_code, new_count
+        FROM runs WHERE source = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (name,),
+    ).fetchone()
+    if row is None:
+        return {}
+    return {"ended_at": row[0], "exit_code": row[1], "new_count": row[2]}
+
+
+def query_permanent_fails(db: sqlite3.Connection | None, name: str) -> int:
+    if db is None:
+        return 0
+    row = db.execute(
+        """
+        SELECT count(*) FROM video_failures
+        WHERE source = ? AND kind = 'permanent' AND attempts >= 3
+        """,
+        (name,),
+    ).fetchone()
+    return row[0] if row else 0
+
+
 def status_command(args) -> int:
     """Print a summary table of all sources, or detailed view for one source."""
     name: str | None = getattr(args, "name", None)
@@ -587,50 +628,12 @@ def status_command(args) -> int:
             db.close()
         return rc
 
-    def query_source_state(src_name: str) -> dict:
-        if db is None:
-            return {}
-        row = db.execute(
-            "SELECT last_check_at, imported_at FROM source_state WHERE source = ?",
-            (src_name,),
-        ).fetchone()
-        if row is None:
-            return {}
-        return {"last_check_at": row[0], "imported_at": row[1]}
-
-    def query_last_run(src_name: str) -> dict:
-        if db is None:
-            return {}
-        row = db.execute(
-            """
-            SELECT ended_at, exit_code, new_count
-            FROM runs WHERE source = ?
-            ORDER BY id DESC LIMIT 1
-            """,
-            (src_name,),
-        ).fetchone()
-        if row is None:
-            return {}
-        return {"ended_at": row[0], "exit_code": row[1], "new_count": row[2]}
-
-    def query_permanent_fails(src_name: str) -> int:
-        if db is None:
-            return 0
-        row = db.execute(
-            """
-            SELECT count(*) FROM video_failures
-            WHERE source = ? AND kind = 'permanent' AND attempts >= 3
-            """,
-            (src_name,),
-        ).fetchone()
-        return row[0] if row else 0
-
     rows: list[tuple[object, str, str]] = []
     any_permanent = False
     for source in config.sources:
-        ss = query_source_state(source.name)
-        lr = query_last_run(source.name)
-        pf = query_permanent_fails(source.name)
+        ss = query_source_state(db, source.name)
+        lr = query_last_run(db, source.name)
+        pf = query_permanent_fails(db, source.name)
         if pf > 0:
             any_permanent = True
 

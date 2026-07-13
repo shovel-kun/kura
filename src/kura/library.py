@@ -368,6 +368,28 @@ def _sort_rows(rows: list[dict], sort: str) -> list[dict]:
     )
 
 
+def query_videos(
+    db_path: Path,
+    source_names: list[str],
+    *,
+    terms: list[str] = (),
+    since: str | None = None,
+    until: str | None = None,
+    uploaded: bool = False,
+    sort: str = "downloaded",
+) -> list[dict]:
+    """Load indexed videos, apply search filters, and sort the result."""
+    rows = _load_rows(db_path, source_names)
+    rows = _apply_filters(
+        rows,
+        terms=terms,
+        since=since,
+        until=until,
+        uploaded=uploaded,
+    )
+    return _sort_rows(rows, sort)
+
+
 def _select_sources(config, names: list[str] | None):
     """Resolve ``--source`` names to Source objects (all when None/empty)."""
     if not names:
@@ -403,22 +425,23 @@ def search_command(args) -> int:
     for source in selected:
         refresh_index(source, full=bool(getattr(args, "reindex", False)), db_path=db_path)
 
-    rows = _load_rows(db_path, [s.name for s in selected])
-    total_indexed = len(rows)
+    source_names = [s.name for s in selected]
+    total_indexed = len(_load_rows(db_path, source_names))
 
     try:
-        rows = _apply_filters(
-            rows,
+        rows = query_videos(
+            db_path,
+            source_names,
             terms=list(getattr(args, "query", []) or []),
             since=getattr(args, "since", None),
             until=getattr(args, "until", None),
             uploaded=bool(getattr(args, "uploaded", False)),
+            sort=getattr(args, "sort", "downloaded"),
         )
     except ConfigError as error:
         print(ui.red(f"{ui.FAIL} {error}"))
         return 1
 
-    rows = _sort_rows(rows, getattr(args, "sort", "downloaded"))
     single_source = len(config.sources) == 1
 
     if getattr(args, "interactive", False):

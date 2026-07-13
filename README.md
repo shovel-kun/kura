@@ -23,6 +23,7 @@ kura logs NAME [-n N] [--path]
 kura search [QUERY...] [--source NAME] [--since X] [--until X] [--uploaded] [--sort downloaded|uploaded|title|size] [-n N] [--path] [--json] [-i] [--reindex]
 kura show [SOURCE] VIDEO_ID
 kura doctor
+kura ui
 ```
 
 `kura import NAME` scans the source's output directory for `*.info.json` sidecar files, computes the yt-dlp archive key for each video, and appends any missing keys to `archive.txt` (backing it up first).  Pass `--dry-run` to preview the report without writing anything.
@@ -71,6 +72,31 @@ kura search -i
 `kura show SOURCE VIDEO_ID` (or just `kura show VIDEO_ID` when the id is unambiguous across sources) prints the indexed details for one video: title, uploader, upload/download dates, duration, file size, directory path, and the file extensions present in the video's folder.
 
 Known behavior: rows for videos deleted from disk remain in the index until a `kura search --reindex` rebuilds it — the incremental scan only ever adds and updates rows.
+
+## Interactive UI
+
+`kura ui` opens a terminal interface over the same config, state, and library index used by the CLI. It starts in the Library browser, where search terms use the same case-insensitive AND matching as `kura search`; press `tab` to open the Sources dashboard and inspect or control configured sources.
+
+Library keys:
+
+| Key | Action |
+|-----|--------|
+| `/` / `escape` | Focus search / return to results |
+| `enter` | Play the selected video |
+| `o` / `y` | Open its folder / copy its path |
+| `s` / `f` | Cycle sort order / source filter (`f` appears with multiple sources) |
+| `R` | Fully rebuild the library index |
+| `tab` / `q` | Open Sources / quit |
+
+Sources keys:
+
+| Key | Action |
+|-----|--------|
+| `enter` | Open the selected source in Library |
+| `r` | Run the selected source now |
+| `l` | Show or hide run output |
+| `p` | Pause or resume the selected source |
+| `tab` / `q` | Return to Library / quit |
 
 ## Update Strategies
 
@@ -257,4 +283,3 @@ loginctl enable-linger $USER
 ```
 
 The timer fires every 15 minutes (`OnCalendar=*:0/15`); `Persistent=true` means a missed tick (e.g. after suspend) is caught on the next boot.  kura then checks each source's cron schedule independently, so sources with e.g. `0 */6 * * *` only actually run every 6 hours.
-

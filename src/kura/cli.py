@@ -237,6 +237,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor_parser.set_defaults(func=doctor_command)
 
+    ui_parser = subcommands.add_parser("ui", help="browse the library interactively")
+    ui_parser.set_defaults(func=_ui_command)
+
     return parser
 
 
@@ -256,6 +259,15 @@ def _run_command_wrapper(args) -> int:
         return 2
 
     return run_command(args)
+
+
+def _ui_command(_args) -> int:
+    if not sys.stdout.isatty():
+        print(ui.red(f"{ui.FAIL} kura ui needs an interactive terminal"))
+        return 1
+    from .tui import run_ui
+
+    return run_ui()
 
 
 def main(argv: list[str] | None = None) -> int:
