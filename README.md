@@ -20,6 +20,8 @@ kura resume NAME
 kura suppress NAME VIDEO_ID [--reason TEXT] [--extractor EXT]
 kura unsuppress NAME VIDEO_ID [--extractor EXT]
 kura logs NAME [-n N] [--path]
+kura search [QUERY...] [--source NAME] [--since X] [--until X] [--uploaded] [--sort downloaded|uploaded|title|size] [-n N] [--path] [--json] [-i] [--reindex]
+kura show [SOURCE] VIDEO_ID
 kura doctor
 ```
 
@@ -42,6 +44,33 @@ kura doctor
 `kura logs NAME` prints the last 50 lines of the most recent run log for the named source.  Use `-n N` to override the line count.  Use `--path` to print only the absolute path of the log file (useful for piping into a pager: `less "$(kura logs NAME --path)"`).
 
 `kura doctor` runs a series of health checks and reports each as `ok:`, `warn:`, or `FAIL:`.  Exits 0 when no `FAIL` lines were emitted (warnings are allowed), exits 1 otherwise.  Checks include: yt-dlp on PATH and version freshness (warns if > 90 days old), ffmpeg on PATH, config.yaml validity, per-source output_dir and archive accessibility, cookies file existence, state.db integrity, currently-running sources (lock probe), and systemd timer status.
+
+## Searching the library
+
+`kura search` queries an index of every downloaded video, built from the metadata sidecars on disk (`*.info.json` for yt-dlp, `*.json` for nndownload) and cached in the state database.  The index refreshes incrementally on every invocation — only sidecars written since the last scan are re-parsed — so searching stays fast on large archives.  Disk remains the source of truth: the cache is rebuildable at any time.
+
+```sh
+# free-text terms AND-match against title + uploader, case-insensitive
+kura search live 2024
+
+# everything downloaded in the last 7 days (also accepts YYYY-MM-DD, or 12h)
+kura search --since 7d
+
+# one source only, biggest files first
+kura search --source test-channel --sort size
+
+# pipe result directories straight into a player
+kura search --since 24h --path | xargs -d '\n' mpv
+
+# interactive picker (requires fzf); prints the selected video's directory
+kura search -i
+```
+
+`--uploaded` switches `--since`/`--until` to match the video's upload date instead of the download time.  `--sort` accepts `downloaded` (default, newest first), `uploaded`, `title`, and `size`.  `-n N` limits the result count (default 20, `0` shows all).  `--json` emits the matching rows as a JSON array for scripting.  `--reindex` rebuilds the index for the searched sources from scratch instead of scanning incrementally.
+
+`kura show SOURCE VIDEO_ID` (or just `kura show VIDEO_ID` when the id is unambiguous across sources) prints the indexed details for one video: title, uploader, upload/download dates, duration, file size, directory path, and the file extensions present in the video's folder.
+
+Known behavior: rows for videos deleted from disk remain in the index until a `kura search --reindex` rebuilds it — the incremental scan only ever adds and updates rows.
 
 ## Update Strategies
 

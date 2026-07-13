@@ -51,6 +51,25 @@ CREATE TABLE IF NOT EXISTS source_state (
     imported_at TEXT,
     last_full_run_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS videos (
+    source TEXT,
+    archive_key TEXT,
+    video_id TEXT,
+    title TEXT,
+    uploader TEXT,
+    upload_date TEXT,
+    duration_s INTEGER,
+    size_bytes INTEGER,
+    dir TEXT,
+    downloaded_at TEXT,
+    PRIMARY KEY(source, archive_key)
+);
+
+CREATE TABLE IF NOT EXISTS video_index_state (
+    source TEXT PRIMARY KEY,
+    last_scan_at TEXT
+);
 """
 
 

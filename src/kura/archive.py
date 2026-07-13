@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +47,50 @@ def archive_key(info: dict) -> str | None:
     if not extractor:
         return None
     return f"{extractor.lower()} {video_id}"
+
+
+_NNDOWNLOAD_ID_RE = re.compile(r"^(?:sm|so|nm)\d+$")
+
+
+def nndownload_sidecar_info(path: Path) -> dict | None:
+    """Parse *path* as an nndownload metadata sidecar and qualify it.
+
+    Returns the parsed metadata dict when *path* is a valid nndownload sidecar
+    (an object with a niconico-style ``id`` and at least one URL-ish field
+    pointing at nicovideo.jp), or ``None`` when it is not (callers should
+    silently ignore).
+
+    Parse errors in generic ``.json`` files are silently swallowed — the file
+    was never claimed to be nndownload evidence.  (Compare with ``.info.json``
+    parse errors, which are warned about by ``kura import``.)
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None  # silently skip; not our file
+
+    if not isinstance(data, dict):
+        return None
+
+    video_id = data.get("id")
+    if not isinstance(video_id, str) or not _NNDOWNLOAD_ID_RE.match(video_id):
+        return None
+
+    # Require at least one URL-ish field pointing at nicovideo.jp.
+    for field in ("document_url", "url", "thumbnail_url"):
+        val = data.get(field, "")
+        if isinstance(val, str) and "nicovideo.jp" in val:
+            return data
+
+    return None
+
+
+def nndownload_archive_key(path: Path) -> str | None:
+    """Return ``"niconico <id>"`` when *path* is a valid nndownload sidecar, else None."""
+    data = nndownload_sidecar_info(path)
+    if data is None:
+        return None
+    return f"niconico {data['id']}"
 
 
 def read_archive(path: Path) -> set[str]:

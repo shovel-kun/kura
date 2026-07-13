@@ -22,6 +22,7 @@ from .commands import (
     verify_command,
 )
 from .config import ConfigError
+from .library import search_command, show_command
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -140,6 +141,95 @@ def build_parser() -> argparse.ArgumentParser:
         help="print only the absolute path of the latest log file",
     )
     logs_parser.set_defaults(func=logs_command)
+
+    search_parser = subcommands.add_parser(
+        "search",
+        help="search the indexed video library",
+    )
+    search_parser.add_argument(
+        "query",
+        nargs="*",
+        help="free-text terms; AND-matched against title and uploader (case-insensitive)",
+    )
+    search_parser.add_argument(
+        "--source",
+        action="append",
+        dest="sources",
+        metavar="NAME",
+        default=None,
+        help="limit to a source (repeatable)",
+    )
+    search_parser.add_argument(
+        "--since",
+        metavar="X",
+        default=None,
+        help="only videos downloaded on/after X (YYYY-MM-DD or a duration like 7d/12h)",
+    )
+    search_parser.add_argument(
+        "--until",
+        metavar="X",
+        default=None,
+        help="only videos downloaded on/before X (YYYY-MM-DD or a duration like 7d/12h)",
+    )
+    search_parser.add_argument(
+        "--uploaded",
+        action="store_true",
+        help="match --since/--until against the upload date instead of the download time",
+    )
+    search_parser.add_argument(
+        "--sort",
+        choices=["downloaded", "uploaded", "title", "size"],
+        default="downloaded",
+        help="sort order (default: downloaded, newest first)",
+    )
+    search_parser.add_argument(
+        "-n",
+        type=int,
+        default=20,
+        metavar="N",
+        help="number of results to show (default: 20, 0 = all)",
+    )
+    search_parser.add_argument(
+        "--path",
+        action="store_true",
+        help="print one directory per line, nothing else (for piping to mpv/xargs)",
+    )
+    search_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="print matches as a JSON array",
+    )
+    search_parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="pick a video interactively with fzf; prints the selected directory",
+    )
+    search_parser.add_argument(
+        "--reindex",
+        action="store_true",
+        help="rebuild the index from disk instead of scanning incrementally",
+    )
+    search_parser.set_defaults(func=search_command)
+
+    show_parser = subcommands.add_parser(
+        "show",
+        help="show indexed details for one video",
+    )
+    show_parser.add_argument(
+        "source_or_id",
+        metavar="SOURCE",
+        help="source name (or just VIDEO_ID when unambiguous)",
+    )
+    show_parser.add_argument(
+        "video_id",
+        nargs="?",
+        default=None,
+        metavar="VIDEO_ID",
+        help="video ID as recorded in the metadata sidecar",
+    )
+    show_parser.set_defaults(func=show_command)
 
     doctor_parser = subcommands.add_parser(
         "doctor",

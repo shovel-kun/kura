@@ -3,7 +3,6 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
-import re
 import shlex
 import shutil
 import sqlite3
@@ -15,7 +14,14 @@ from pathlib import Path
 from croniter import croniter
 
 from . import paths, state, ui
-from .archive import MEDIA_EXTENSIONS, append_archive_entries, archive_key, read_archive, remove_archive_entry
+from .archive import (
+    MEDIA_EXTENSIONS,
+    append_archive_entries,
+    archive_key,
+    nndownload_archive_key as _nndownload_archive_key,
+    read_archive,
+    remove_archive_entry,
+)
 from .config import (
     DEFAULT_CONFIG_TEXT,
     DEFAULT_PROFILE_TEXT,
@@ -150,40 +156,6 @@ def import_command(args) -> int:
             print(ui.dim(f"{name} — skipped, already running; import aborted to avoid archive corruption"))
             return 1
         return _import_locked(source, name, dry_run)
-
-
-_NNDOWNLOAD_ID_RE = re.compile(r"^(?:sm|so|nm)\d+$")
-
-
-def _nndownload_archive_key(path: Path) -> str | None:
-    """Try to extract a niconico archive key from an nndownload metadata sidecar.
-
-    Returns ``"niconico <id>"`` when *path* is a valid nndownload sidecar, or
-    ``None`` when it is not (caller should silently ignore).
-
-    Parse errors in generic ``.json`` files are silently swallowed — the file
-    was never claimed to be nndownload evidence.  (Compare with ``.info.json``
-    parse errors, which are warned about.)
-    """
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None  # silently skip; not our file
-
-    if not isinstance(data, dict):
-        return None
-
-    video_id = data.get("id")
-    if not isinstance(video_id, str) or not _NNDOWNLOAD_ID_RE.match(video_id):
-        return None
-
-    # Require at least one URL-ish field pointing at nicovideo.jp.
-    for field in ("document_url", "url", "thumbnail_url"):
-        val = data.get(field, "")
-        if isinstance(val, str) and "nicovideo.jp" in val:
-            return f"niconico {video_id}"
-
-    return None
 
 
 def _import_locked(source, name: str, dry_run: bool) -> int:
