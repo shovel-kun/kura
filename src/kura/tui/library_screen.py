@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -15,6 +16,21 @@ from kura import library, ui
 from kura.archive import MEDIA_EXTENSIONS
 
 from . import launchers
+
+
+def _truncate_cells(text: str, max_cells: int) -> str:
+    """Truncate *text* to *max_cells* terminal cells (CJK chars are 2 cells wide)."""
+    if cell_len(text) <= max_cells:
+        return text
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        w = cell_len(ch)
+        if used + w > max_cells - 1:
+            break
+        out.append(ch)
+        used += w
+    return "".join(out) + "…"
 
 
 class LibraryScreen(Screen):
@@ -44,6 +60,7 @@ class LibraryScreen(Screen):
             placeholder="search titles and uploaders…",
             id="search",
         )
+        yield Static(id="status")
         with Horizontal(id="library-body"):
             yield DataTable(id="library-table", cursor_type="row", zebra_stripes=True)
             yield Static("No video selected", id="detail")
@@ -51,9 +68,6 @@ class LibraryScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#library-table", DataTable)
-        table.add_column("date", width=12, key="date")
-        table.add_column("title", width=24, key="title")
-        table.add_column("meta", width=24, key="meta")
         table.focus()
         if len(self.app.config.sources) > 1:
             self._bindings.bind("f", "cycle_source", description="Source")
@@ -87,17 +101,29 @@ class LibraryScreen(Screen):
         )
 
         table = self.query_one("#library-table", DataTable)
-        title_width = 24
-        table.clear()
         single_source = len(self.app.config.sources) == 1
+
+        dates = [library._date_col(row["downloaded_at"]) for row in self.rows]
+        metas = [library._meta_cell(row, single_source=single_source) for row in self.rows]
+
+        # Size columns to the actual table width; the title column takes
+        # whatever remains, truncated by terminal cells (CJK-aware).
+        date_w = max([cell_len(d) for d in dates] + [6])
+        meta_w = min(max([cell_len(m) for m in metas] + [10]), 26)
+        avail = table.size.width or int(self.app.size.width * 0.6)
+        # 2 cells of cell-padding per column + room for the vertical scrollbar.
+        title_w = max(avail - date_w - meta_w - 3 * 2 - 2, 16)
+
+        table.clear(columns=True)
+        table.add_column("date", width=date_w, key="date")
+        table.add_column("title", width=title_w, key="title")
+        table.add_column("meta", width=meta_w, key="meta")
         for index, row in enumerate(self.rows):
             title = row["title"] or row["video_id"] or ""
-            if len(title) > title_width:
-                title = title[: title_width - 1] + "…"
             table.add_row(
-                Text(library._date_col(row["downloaded_at"]), style="dim"),
-                title,
-                Text(library._meta_cell(row, single_source=single_source), style="dim"),
+                Text(dates[index], style="dim"),
+                _truncate_cells(title, title_w),
+                Text(metas[index], style="dim"),
                 key=str(index),
             )
         if self.rows:
@@ -106,9 +132,17 @@ class LibraryScreen(Screen):
         else:
             self.query_one("#detail", Static).update("No matching videos")
 
-        search = self.query_one("#search", Input)
-        filter_text = self.source_filter or "all sources"
-        search.border_title = f"{self.sort} · {filter_text}"
+        terms = self.query_one("#search", Input).value.split()
+        parts = [
+            f"{len(self.rows)} {'match' if terms else 'video'}{'' if len(self.rows) == 1 else 'es' if terms else 's'}",
+            f"sort {self.sort}",
+            self.source_filter or "all sources",
+        ]
+        self.query_one("#status", Static).update(Text(f" {ui.DOT} ".join(parts), style="dim"))
+
+    def on_resize(self, _event) -> None:
+        if self.is_mounted and self.rows is not None:
+            self.refresh_rows()
 
     def set_source_filter(self, name: str) -> None:
         self.source_filter = name

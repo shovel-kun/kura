@@ -165,3 +165,15 @@ async def test_enter_plays_resolved_media_file(monkeypatch, tmp_path):
 
     assert captured
     assert captured[0] == ["mpv", str(newest / "Alpha Newest [ytNEWEST001].mkv")]
+
+
+def test_truncate_cells_cjk_aware():
+    from kura.tui.library_screen import _truncate_cells
+
+    # ASCII: fits untouched, truncates with ellipsis
+    assert _truncate_cells("hello", 10) == "hello"
+    assert _truncate_cells("hello world", 8) == "hello w…"
+    # CJK: each char is 2 cells; 10 cells fit 4 chars + ellipsis
+    assert _truncate_cells("あきばっかーの", 10) == "あきばっ…"
+    # exact fit is not truncated
+    assert _truncate_cells("あいう", 6) == "あいう"

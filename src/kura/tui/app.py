@@ -27,6 +27,11 @@ class KuraApp(App):
         border: tall #6aa9ff;
     }
 
+    #status {
+        height: 1;
+        padding: 0 2;
+    }
+
     #library-body {
         height: 1fr;
     }
