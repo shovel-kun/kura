@@ -4,6 +4,7 @@ import argparse
 import importlib.metadata
 import sys
 
+from . import ui
 from .commands import (
     add_command,
     doctor_command,
@@ -157,11 +158,11 @@ def _run_command_wrapper(args) -> int:
     name: str | None = args.name
 
     if force and (due or all_mode):
-        print("error: --force cannot be combined with --due or --all")
+        print(ui.red(f"{ui.FAIL} --force cannot be combined with --due or --all"))
         return 2
 
     if name is None and not due and not all_mode:
-        print("error: specify a source name, --due, or --all")
+        print(ui.red(f"{ui.FAIL} specify a source name, --due, or --all"))
         return 2
 
     return run_command(args)

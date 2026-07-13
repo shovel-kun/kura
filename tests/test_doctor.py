@@ -214,7 +214,7 @@ class TestLogsCommand:
         rc = main(["logs", "no-such-source"])
         assert rc == 1
         out = capsys.readouterr().out
-        assert "error" in out.lower()
+        assert "✗ unknown source" in out
 
     def test_no_logs_yet_exits_0(self, monkeypatch, tmp_path: Path, capsys) -> None:
         self._setup(monkeypatch, tmp_path)
@@ -356,22 +356,22 @@ class TestDoctorCommand:
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 0
-        assert "FAIL" not in out
-        assert "ok:" in out
+        assert "✗" not in out
+        assert "✓" in out
 
     def test_healthy_setup_reports_ytdlp_ok(self, monkeypatch, tmp_path: Path, capsys) -> None:
         self._setup_healthy(monkeypatch, tmp_path)
         capsys.readouterr()  # flush init output
         main(["doctor"])
         out = capsys.readouterr().out
-        assert "ok: yt-dlp found" in out
+        assert "✓ yt-dlp" in out
 
     def test_healthy_setup_reports_ffmpeg_ok(self, monkeypatch, tmp_path: Path, capsys) -> None:
         self._setup_healthy(monkeypatch, tmp_path)
         capsys.readouterr()  # flush init output
         main(["doctor"])
         out = capsys.readouterr().out
-        assert "ok: ffmpeg found" in out
+        assert "✓ ffmpeg" in out
 
     def test_missing_ffmpeg_exits_1_with_fail(self, monkeypatch, tmp_path: Path, capsys) -> None:
         config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
@@ -390,7 +390,7 @@ class TestDoctorCommand:
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "FAIL" in out
+        assert "✗" in out
         assert "ffmpeg" in out
 
     def test_missing_ytdlp_exits_1_with_fail(self, monkeypatch, tmp_path: Path, capsys) -> None:
@@ -410,18 +410,18 @@ class TestDoctorCommand:
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "FAIL" in out
+        assert "✗" in out
         assert "yt-dlp" in out
 
     def test_stale_ytdlp_version_warns_but_exits_0(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        """A yt-dlp version > 90 days old → warn but no FAIL, exit 0."""
+        """A yt-dlp version > 90 days old → warning but no failure, exit 0."""
         self._setup_healthy(monkeypatch, tmp_path, ytdlp_version="2024.01.01")
         capsys.readouterr()  # flush init output
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 0
-        assert "FAIL" not in out
-        assert "warn" in out.lower()
+        assert "✗" not in out
+        assert "! yt-dlp version" in out
         assert "old" in out or "days" in out
 
     def test_recent_ytdlp_version_no_warn(self, monkeypatch, tmp_path: Path, capsys) -> None:
@@ -435,9 +435,9 @@ class TestDoctorCommand:
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 0
-        assert "FAIL" not in out
+        assert "✗" not in out
         # Should NOT warn about age
-        lines_with_old = [l for l in out.splitlines() if "days old" in l and "warn" in l]
+        lines_with_old = [line for line in out.splitlines() if "days old" in line]
         assert lines_with_old == []
 
     def test_broken_config_exits_1_fail_skips_per_source(self, monkeypatch, tmp_path: Path, capsys) -> None:
@@ -464,7 +464,7 @@ sources: []
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "FAIL" in out
+        assert "✗" in out
         assert "config" in out.lower()
 
     def test_cookies_file_missing_exits_1_fail(  # noqa: C901
@@ -502,7 +502,7 @@ sources:
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "FAIL" in out
+        assert "✗" in out
         assert "cookies" in out.lower()
 
     def test_cookies_from_browser_reports_ok(self, monkeypatch, tmp_path: Path, capsys) -> None:
@@ -537,9 +537,11 @@ sources:
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 0
-        assert "FAIL" not in out
-        assert "browser" in out.lower()
-        # Should not FAIL for browser cookies.
+        assert "✗" not in out
+        assert (
+            "✓ test-src — output dir writable · archive not created · cookies from firefox"
+            in out
+        )
 
     def test_held_lock_reports_running(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """When a source lock is held, doctor reports 'appears to be running'."""
@@ -554,7 +556,7 @@ sources:
             rc = main(["doctor"])
 
         out = capsys.readouterr().out
-        assert rc == 0  # held lock is not a FAIL
+        assert rc == 0  # held lock is a warning, not a failure
         assert "appears to be running" in out
 
     def test_systemctl_inactive_warns(self, monkeypatch, tmp_path: Path, capsys) -> None:
@@ -563,9 +565,8 @@ sources:
         rc = main(["doctor"])
         out = capsys.readouterr().out
         assert rc == 0
-        assert "warn" in out.lower()
-        # inactive timer is a warning, not a FAIL
-        assert "FAIL" not in out
+        assert "! kura.timer" in out
+        assert "✗" not in out
         assert "kura.timer" in out
 
     def test_systemctl_active_reports_ok(self, monkeypatch, tmp_path: Path, capsys) -> None:
@@ -573,7 +574,7 @@ sources:
         capsys.readouterr()  # flush init output
         main(["doctor"])
         out = capsys.readouterr().out
-        assert "ok: kura.timer is active" in out
+        assert "✓ kura.timer is active" in out
 
     def test_db_integrity_reported(self, monkeypatch, tmp_path: Path, capsys) -> None:
         self._setup_healthy(monkeypatch, tmp_path)
@@ -581,7 +582,7 @@ sources:
         main(["doctor"])
         out = capsys.readouterr().out
         assert "state.db" in out
-        assert "FAIL" not in out
+        assert "✗" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +711,7 @@ class TestConcurrentRun:
             assert f"src-{i}" in out
 
     def test_quiet_mode_suppresses_streaming_output(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        """Concurrent run: per-line yt-dlp output not printed to console; start line is."""
+        """Concurrent run prints summaries without streaming downloader output."""
         known_line = "UNIQUE_STREAMING_LINE_XYZ"
         self._setup(
             monkeypatch,
@@ -725,8 +726,8 @@ class TestConcurrentRun:
 
         # The streaming line should NOT appear on stdout (quiet mode).
         assert known_line not in out
-        # Start lines should appear.
-        assert "started" in out
+        assert "✓ src-0 — nothing new" in out
+        assert "✓ src-1 — nothing new" in out
 
     def test_quiet_mode_output_in_log_file(self, monkeypatch, tmp_path: Path) -> None:
         """In concurrent mode, per-line output still written to log file."""
@@ -798,35 +799,35 @@ class TestLocalTimeDisplay:
         assert main(["init"]) == 0
         return config_dir, state_dir
 
-    def test_status_timezone_footnote_present(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        """kura status prints a '(times shown in TZ)' footnote."""
+    def test_status_timezone_footnote_dropped(self, monkeypatch, tmp_path: Path, capsys) -> None:
+        """kura status uses self-explanatory relative times without a footer."""
         self._setup(monkeypatch, tmp_path)
         main(["status"])
         out = capsys.readouterr().out
-        assert "times shown in" in out
+        assert "kura · 1 source" in out
 
-    def test_status_footnote_contains_tz_name(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        """The footnote contains the current timezone abbreviation."""
+    def test_status_does_not_show_timezone_abbreviation(self, monkeypatch, tmp_path: Path, capsys) -> None:
+        """The overview no longer needs a timezone abbreviation."""
         self._setup(monkeypatch, tmp_path)
         expected_tz = datetime.now().astimezone().tzname()
         main(["status"])
         out = capsys.readouterr().out
-        assert expected_tz in out
+        assert expected_tz not in out
 
-    def test_status_detail_shows_times_in_tz(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        """kura status NAME shows 'times in TZ' in the recent-runs heading."""
+    def test_status_detail_uses_self_explanatory_next_time(self, monkeypatch, tmp_path: Path, capsys) -> None:
+        """kura status NAME shows a relative next-check line."""
         _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         main(["status", "test-src"])
         out = capsys.readouterr().out
-        assert "times in" in out.lower()
+        assert "next check" in out.lower()
 
     def test_local_ts_converts_utc_correctly(self) -> None:
-        """_local_ts converts a known UTC string to local time."""
-        from kura.commands import _local_ts
+        """ui.local_ts converts a known UTC string to local time."""
+        from kura.ui import local_ts
 
         # A fixed UTC time
         utc_str = "2024-06-01T12:00:00+00:00"
-        result = _local_ts(utc_str)
+        result = local_ts(utc_str, "%Y-%m-%d %H:%M")
 
         # Re-derive the expected local string.
         dt = datetime.fromisoformat(utc_str)
@@ -834,12 +835,12 @@ class TestLocalTimeDisplay:
         assert result == expected
 
     def test_local_ts_handles_naive_utc(self) -> None:
-        """_local_ts treats naive datetimes as UTC and converts."""
-        from kura.commands import _local_ts
+        """ui.local_ts treats naive datetimes as UTC and converts."""
+        from kura.ui import local_ts
 
         # Naive UTC string (no tz suffix) as stored in older rows.
         utc_naive = "2024-06-01T12:00:00"
-        result = _local_ts(utc_naive)
+        result = local_ts(utc_naive, "%Y-%m-%d %H:%M")
         # Should not raise; result should be a formatted string.
         assert len(result) == 16
         assert "T" not in result  # was replaced
@@ -874,9 +875,7 @@ class TestLocalTimeDisplay:
         main(["run", "--due"])
         out = capsys.readouterr().out
 
-        # The "not due" line should mention the local tz name.
-        tz_name = datetime.now().astimezone().tzname()
-        assert tz_name in out
+        assert "not due (next in" in out
 
 
 # ---------------------------------------------------------------------------

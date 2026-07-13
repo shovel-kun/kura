@@ -75,7 +75,7 @@ def test_add_and_list_end_to_end(monkeypatch, tmp_path: Path, capsys) -> None:
     output = capsys.readouterr().out
     assert "test-channel" in output
     assert "rss" in output
-    assert "0 0 * * *" in output
+    assert "daily 00:00" in output
     assert "/archive/test-channel" in output
 
 
@@ -86,4 +86,4 @@ def test_doctor_without_config_reports_fail(monkeypatch, tmp_path: Path, capsys)
     rc = main(["doctor"])
     out = capsys.readouterr().out
     assert rc == 1
-    assert "FAIL" in out
+    assert "✗ config.yaml" in out

@@ -681,8 +681,7 @@ def test_run_nndownload_exit0_two_items(monkeypatch, tmp_path: Path, capsys) -> 
     assert exit_code == 0
 
     captured = capsys.readouterr()
-    assert "exit=0" in captured.out
-    assert "new=2" in captured.out
+    assert "✓ nico-src — 2 new" in captured.out
 
     db_path = state_dir / "state.db"
     with sqlite3.connect(db_path) as conn:
@@ -847,7 +846,7 @@ def test_verify_nndownload_pending_two(monkeypatch, tmp_path: Path, capsys) -> N
     assert result == 0
 
     captured = capsys.readouterr()
-    assert "pending: 2" in captured.out
+    assert "nico-src — 2 pending" in captured.out
 
 
 def test_verify_nndownload_zero_ids_with_nonempty_archive_exits_1(
@@ -906,7 +905,7 @@ def test_doctor_unpatched_nndownload_fails(monkeypatch, tmp_path: Path, capsys) 
     assert result == 1  # has FAIL
 
     captured = capsys.readouterr()
-    assert "unpatched nndownload" in captured.out
+    assert "✗ nndownload unpatched" in captured.out
 
 
 def test_doctor_patched_nndownload_ok(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -935,7 +934,7 @@ def test_doctor_patched_nndownload_ok(monkeypatch, tmp_path: Path, capsys) -> No
     # May still have warnings (output_dir doesn't exist, etc.) but key check is ok.
     captured = capsys.readouterr()
     assert "unpatched nndownload" not in captured.out
-    assert "nndownload is patched" in captured.out
+    assert "nndownload patched" in captured.out
 
 
 def test_doctor_session_cookie_missing_fails(monkeypatch, tmp_path: Path, capsys) -> None:

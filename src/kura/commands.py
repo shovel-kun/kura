@@ -14,7 +14,7 @@ from pathlib import Path
 
 from croniter import croniter
 
-from . import paths, state
+from . import paths, state, ui
 from .archive import MEDIA_EXTENSIONS, append_archive_entries, archive_key, read_archive, remove_archive_entry
 from .config import (
     DEFAULT_CONFIG_TEXT,
@@ -109,25 +109,21 @@ def add_command(args) -> int:
 
 def list_command(_args) -> int:
     config = load_config()
-    rows = [
-        ("name", "enabled", "strategy", "schedule", "profile", "output_dir"),
-        *[
-            (
-                source.name,
-                "yes" if source.enabled else "no",
-                source.update_strategy,
-                source.schedule,
-                source.profile,
-                str(source.output_dir),
-            )
-            for source in config.sources
-        ],
+    names = [source.name for source in config.sources]
+    details = [
+        f"{source.downloader or 'ytdlp'} {ui.DOT} {source.update_strategy} {ui.DOT} "
+        f"{ui.human_cron(source.schedule)} {ui.DOT} {source.profile}"
+        for source in config.sources
     ]
-    widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
-    for index, row in enumerate(rows):
-        print("  ".join(cell.ljust(widths[col]) for col, cell in enumerate(row)).rstrip())
-        if index == 0:
-            print("  ".join("-" * width for width in widths).rstrip())
+    name_width = max(map(len, names), default=0)
+    detail_width = max(map(len, details), default=0)
+    for source, detail in zip(config.sources, details):
+        glyph = ui.green(ui.ON) if source.enabled else ui.dim(ui.OFF)
+        name = ui.bold(source.name) if source.enabled else ui.dim(source.name)
+        print(
+            f"  {glyph} {ui.pad(name, name_width)}   "
+            f"{ui.pad(ui.dim(detail), detail_width)}   {source.output_dir}"
+        )
     return 0
 
 
@@ -139,19 +135,19 @@ def import_command(args) -> int:
     try:
         config = load_config()
     except ConfigError as error:
-        print(f"error: {error}")
+        print(ui.red(f"{ui.FAIL} {error}"))
         return 1
 
     source = next((s for s in config.sources if s.name == name), None)
     if source is None:
         known = ", ".join(s.name for s in config.sources)
-        print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+        print(ui.red(f"{ui.FAIL} unknown source {name!r}" + (f"; known: {known}" if known else "")))
         return 1
 
     # Acquire lock to prevent concurrent run-vs-import on the same archive.
     with source_lock(name, paths.state_dir()) as acquired:
         if not acquired:
-            print(f"skipped: {name} is already running; import aborted to avoid archive corruption")
+            print(ui.dim(f"{name} — skipped, already running; import aborted to avoid archive corruption"))
             return 1
         return _import_locked(source, name, dry_run)
 
@@ -292,35 +288,35 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
     orphan_count = len(archive_set - evidence_keys)
 
     # --- Report ---
-    print(f"source: {name}")
-    print(f"  evidence files scanned:   {scanned}")
-    print(f"  already in archive:       {already_in_archive}")
-    if dry_run:
-        print(f"  would append:             {len(missing)}")
-    else:
-        print(f"  appended:                 {len(missing)}")
+    print(ui.bold(name))
+    append_label = "would append" if dry_run else "appended"
+    labels = ("scanned", "in archive", append_label)
+    label_width = max(map(len, labels))
+    print(f"  {'scanned':<{label_width}} {scanned} evidence files")
+    print(f"  {'in archive':<{label_width}} {already_in_archive}")
+    append_line = f"{append_label:<{label_width}} {len(missing)}"
+    append_style = ui.green if missing else ui.dim
+    print(f"  {append_style(append_line)}")
 
     if unverifiable:
         print()
-        print(
-            f"UNVERIFIABLE media files ({len(unverifiable)}) — "
-            "these WILL be re-downloaded by future runs:"
-        )
+        print(ui.red(f"  unverifiable media ({len(unverifiable)}) — WILL be re-downloaded:"))
         for p in sorted(unverifiable):
-            print(f"  {p}")
+            print(ui.red(f"  {ui.FAIL} {p}"))
 
     if orphan_count:
         print()
-        print(
-            f"Orphan archive entries: {orphan_count} "
-            "(kept on purpose — they suppress re-downloads of deleted items)"
-        )
+        noun = "entry" if orphan_count == 1 else "entries"
+        print(ui.dim(
+            f"  {orphan_count} orphan archive {noun} kept "
+            "(suppresses re-downloads of deleted items)"
+        ))
 
     if skipped_unparseable:
         print()
-        print(f"Warnings — unparseable JSON files ({len(skipped_unparseable)}):")
+        print(ui.yellow(f"Warnings — unparseable JSON files ({len(skipped_unparseable)}):"))
         for p in skipped_unparseable:
-            print(f"  {p}")
+            print(ui.yellow(f"  {p}"))
 
     if dry_run:
         return 0
@@ -343,31 +339,6 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
         )
 
     return 0
-
-
-def _local_ts(utc_iso: str, width: int = 16) -> str:
-    """Convert a UTC ISO-8601 string to a local-time display string.
-
-    Parameters
-    ----------
-    utc_iso:
-        UTC ISO-8601 timestamp string as stored in the database.
-    width:
-        How many characters to keep after converting (default 16 → ``YYYY-MM-DD HH:MM``).
-    """
-    try:
-        dt = datetime.fromisoformat(utc_iso)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        local_dt = dt.astimezone()
-        return local_dt.strftime("%Y-%m-%d %H:%M")[:width]
-    except Exception:
-        return utc_iso[:width].replace("T", " ")
-
-
-def _local_tz_name() -> str:
-    """Return the local timezone abbreviation (e.g. 'JST', 'UTC')."""
-    return datetime.now().astimezone().tzname() or "local"
 
 
 def compute_next_due(schedule: str, last_check_at: str | None, now: datetime | None = None) -> datetime:
@@ -423,7 +394,7 @@ def run_command(args) -> int:
     try:
         config = load_config()
     except ConfigError as error:
-        print(f"error: {error}")
+        print(ui.red(f"{ui.FAIL} {error}"))
         return 1
 
     db_path = paths.state_db()
@@ -436,11 +407,11 @@ def run_command(args) -> int:
         source = next((s for s in config.sources if s.name == name), None)
         if source is None:
             known = ", ".join(s.name for s in config.sources)
-            print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+            print(ui.red(f"{ui.FAIL} unknown source {name!r}" + (f"; known: {known}" if known else "")))
             return 1
 
         if not source.enabled and not force:
-            print(f"error: source {name!r} is disabled; use --force to run it anyway")
+            print(ui.red(f"{ui.FAIL} source {name!r} is disabled; use --force to run it anyway"))
             return 1
 
         notify_enabled = bool(config.defaults.get("notify", True))
@@ -459,16 +430,14 @@ def run_command(args) -> int:
 
     for source in config.sources:
         if not source.enabled:
-            print(f"  {source.name}: disabled")
+            print(ui.dim(f"  {source.name} — disabled"))
             continue
 
         if due_mode:
             last_check_at = _query_last_check_at(db_path, source.name)
             if not is_source_due(source.schedule, last_check_at, now):
                 next_dt = compute_next_due(source.schedule, last_check_at, now)
-                next_local = next_dt.astimezone().strftime("%Y-%m-%d %H:%M")
-                tz_name = _local_tz_name()
-                print(f"  {source.name}: not due (next {next_local} {tz_name})")
+                print(ui.dim(f"  {source.name} — not due (next {ui.rel_time(next_dt, now)})"))
                 continue
 
         due_sources.append(source)
@@ -480,31 +449,32 @@ def run_command(args) -> int:
     if concurrency <= 1 or len(due_sources) <= 1:
         # Serial path: stream output normally.
         for source in due_sources:
-            exit_code = run_source(source, paths.config_dir(), paths.state_dir(), notify=notify_enabled)
-            if exit_code is None:
-                print(f"  {source.name}: skipped (already running)")
-            elif exit_code in (0, 101):
-                print(f"  {source.name}: ran (exit={exit_code})")
-            else:
-                print(f"  {source.name}: failed (exit={exit_code})")
+            exit_code = run_source(
+                source,
+                paths.config_dir(),
+                paths.state_dir(),
+                notify=notify_enabled,
+                summary_indent="  ",
+            )
+            if exit_code is not None and exit_code not in (0, 101):
                 any_failure = True
     else:
         # Concurrent path: run up to `concurrency` sources at once, quiet mode.
         def _run_one(src):
-            return src, run_source(
-                src, paths.config_dir(), paths.state_dir(), quiet=True, notify=notify_enabled
+            return run_source(
+                src,
+                paths.config_dir(),
+                paths.state_dir(),
+                quiet=True,
+                notify=notify_enabled,
+                summary_indent="  ",
             )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {pool.submit(_run_one, src): src for src in due_sources}
             for fut in concurrent.futures.as_completed(futures):
-                src, exit_code = fut.result()
-                if exit_code is None:
-                    print(f"  {src.name}: skipped (already running)")
-                elif exit_code in (0, 101):
-                    print(f"  {src.name}: ran (exit={exit_code})")
-                else:
-                    print(f"  {src.name}: failed (exit={exit_code})")
+                exit_code = fut.result()
+                if exit_code is not None and exit_code not in (0, 101):
                     any_failure = True
 
     return 1 if any_failure else 0
@@ -517,13 +487,13 @@ def verify_command(args) -> int:
     try:
         config = load_config()
     except ConfigError as error:
-        print(f"error: {error}")
+        print(ui.red(f"{ui.FAIL} {error}"))
         return 1
 
     source = next((s for s in config.sources if s.name == name), None)
     if source is None:
         known = ", ".join(s.name for s in config.sources)
-        print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+        print(ui.red(f"{ui.FAIL} unknown source {name!r}" + (f"; known: {known}" if known else "")))
         return 1
 
     source.output_dir.mkdir(parents=True, exist_ok=True)
@@ -544,12 +514,7 @@ def verify_command(args) -> int:
     )
 
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
-    count = len(lines)
-
-    print(f"pending: {count}")
-    for line in lines[:20]:
-        print(f"  {line}")
-    print("pending = items yt-dlp would download now (already-archived items are excluded)")
+    _print_verify_result(name, lines)
 
     if proc.returncode in (0, 101):
         return 0
@@ -593,21 +558,34 @@ def _verify_nndownload(source) -> int:
 
     # Zero-ID guard: if we parsed nothing but the archive is non-empty, treat as failure.
     if not ids and archived_ids:
-        print(
-            f"error: enumeration returned no ids — treating as failure, not an empty backlog"
-        )
+        print(ui.red(f"{ui.FAIL} enumeration returned no ids — treating as failure, not an empty backlog"))
         return 1
 
     pending = ids - archived_ids
-    count = len(pending)
-    print(f"pending: {count}")
-    for vid_id in sorted(pending)[:20]:
-        print(f"  {vid_id}")
-    print("pending = items nndownload would download now (already-archived items are excluded)")
+    _print_verify_result(source.name, sorted(pending))
 
     if proc.returncode in (0, 101):
         return 0
     return 1
+
+
+def _print_verify_result(name: str, lines: list[str]) -> None:
+    count = len(lines)
+    if count == 0:
+        print(f"{ui.bold(name)} {ui.dim('—')} {ui.green(f'{ui.OK} up to date')}")
+        return
+
+    print(f"{ui.bold(name)} {ui.dim('—')} {ui.yellow(f'{count} pending')}")
+    for line in lines[:20]:
+        parts = line.split(maxsplit=2)
+        if len(parts) == 3:
+            item_id, rest = parts[1], parts[2]
+        else:
+            item_id, rest = parts[0], ""
+        suffix = f"  {ui.dim(rest)}" if rest else ""
+        print(f"  {item_id}{suffix}")
+    if count > 20:
+        print(ui.dim(f"  … and {count - 20} more"))
 
 
 def status_command(args) -> int:
@@ -617,25 +595,22 @@ def status_command(args) -> int:
     try:
         config = load_config()
     except ConfigError as error:
-        print(f"error: {error}")
+        print(ui.red(f"{ui.FAIL} {error}"))
         return 1
 
     db_path = paths.state_db()
-    try:
-        db = state.connect(db_path)
-    except Exception:
-        db = None
+    db = state.connect(db_path) if db_path.exists() else None
 
     if name is not None:
         # Detailed single-source view.
         source = next((s for s in config.sources if s.name == name), None)
         if source is None:
             known = ", ".join(s.name for s in config.sources)
-            print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+            print(ui.red(f"{ui.FAIL} unknown source {name!r}" + (f"; known: {known}" if known else "")))
             if db is not None:
                 db.close()
             return 1
-        rc = _status_detail(name, db)
+        rc = _status_detail(source, db)
         if db is not None:
             db.close()
         return rc
@@ -678,74 +653,91 @@ def status_command(args) -> int:
         ).fetchone()
         return row[0] if row else 0
 
-    header = ("name", "enabled", "imported", "last_run", "exit", "new", "fails", "next_due")
-    rows: list[tuple[str, ...]] = [header]
-
+    rows: list[tuple[object, str, str]] = []
     any_permanent = False
     for source in config.sources:
         ss = query_source_state(source.name)
         lr = query_last_run(source.name)
         pf = query_permanent_fails(source.name)
-
-        enabled_str = "yes" if source.enabled else "no"
-        imported_str = "yes" if ss.get("imported_at") else "no"
-
-        last_run_str = "-"
-        exit_str = "-"
-        new_str = "-"
-        if lr.get("ended_at"):
-            last_run_str = _local_ts(lr["ended_at"])
-            exit_str = str(lr["exit_code"])
-            new_str = str(lr["new_count"])
-
-        fails_str = str(pf) if pf > 0 else "-"
         if pf > 0:
             any_permanent = True
 
-        last_check_at = ss.get("last_check_at")
-        if last_check_at:
-            try:
-                next_dt = compute_next_due(source.schedule, last_check_at)
-                next_due_str = next_dt.astimezone().strftime("%Y-%m-%d %H:%M")
-            except Exception:
-                next_due_str = "now"
+        if lr:
+            success = lr["exit_code"] in (0, 101)
+            if success and lr["new_count"]:
+                outcome = ui.green(f"{ui.OK} +{lr['new_count']} new")
+            elif success:
+                outcome = ui.dim(f"{ui.OK} nothing new")
+            else:
+                outcome = ui.red(f"{ui.FAIL} failed (exit {lr['exit_code']})")
+            outcome += ui.dim(f" {ui.DOT} {ui.rel_time(ui.local_dt(lr['ended_at']))}")
         else:
-            next_due_str = "now"
+            outcome = ui.dim("never run")
+        if not ss.get("imported_at"):
+            outcome += " " + ui.yellow("not imported")
+        if pf:
+            outcome += " " + ui.red(f"{pf} failing")
 
-        rows.append((
-            source.name,
-            enabled_str,
-            imported_str,
-            last_run_str,
-            exit_str,
-            new_str,
-            fails_str,
-            next_due_str,
-        ))
+        if source.enabled:
+            last_check_at = ss.get("last_check_at")
+            if last_check_at:
+                next_text = f"next {ui.rel_time(compute_next_due(source.schedule, last_check_at))}"
+            else:
+                next_text = "next now"
+        else:
+            next_text = "paused"
+        rows.append((source, outcome, next_text))
 
     if db is not None:
         db.close()
 
-    widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
-    for index, row in enumerate(rows):
-        print("  ".join(cell.ljust(widths[col]) for col, cell in enumerate(row)).rstrip())
-        if index == 0:
-            print("  ".join("-" * w for w in widths).rstrip())
-
-    tz_name = _local_tz_name()
-    print(f"(times shown in {tz_name})")
+    source_count = len(config.sources)
+    noun = "source" if source_count == 1 else "sources"
+    print(f"kura {ui.dim(f'{ui.DOT} {source_count} {noun}')}")
+    print()
+    name_width = max((len(source.name) for source in config.sources), default=0)
+    outcome_width = max((ui.visible_len(outcome) for _, outcome, _ in rows), default=0)
+    for source, outcome, next_text in rows:
+        glyph = ui.green(ui.ON) if source.enabled else ui.dim(ui.OFF)
+        name_text = ui.bold(source.name) if source.enabled else ui.dim(source.name)
+        print(
+            f"  {glyph} {ui.pad(name_text, name_width)}   "
+            f"{ui.pad(outcome, outcome_width)}    {ui.dim(next_text)}"
+        )
 
     if any_permanent:
         print()
-        print("permanent failures detected; inspect with `kura status NAME` and consider `kura suppress`")
+        print(ui.dim("  run `kura status NAME` for failure details"))
 
     return 0
 
 
-def _status_detail(name: str, db) -> int:
+def _status_detail(source, db) -> int:
     """Print detailed view for a single source."""
-    print(f"source: {name}")
-    print()
+    name = source.name
+    source_state = None
+    if db is not None:
+        source_state = db.execute(
+            "SELECT last_check_at, imported_at FROM source_state WHERE source = ?",
+            (name,),
+        ).fetchone()
+
+    print(ui.bold(name))
+    print(ui.dim(f"  {source.url}"))
+    glyph = ui.green(ui.ON) if source.enabled else ui.dim(ui.OFF)
+    status_word = "enabled" if source.enabled else "disabled"
+    metadata = [status_word, source.update_strategy, ui.human_cron(source.schedule), source.profile]
+    if source_state and source_state[1]:
+        metadata.append(f"imported {ui.local_ts(source_state[1], '%b %d')}")
+    separator = ui.dim(f" {ui.DOT} ")
+    print(f"  {glyph} " + separator.join(metadata))
+
+    archived_count = 0
+    if source.archive_file.exists():
+        archived_count = sum(
+            1 for _ in source.archive_file.open("r", encoding="utf-8", errors="replace")
+        )
+    print(f"  {source.output_dir} {ui.dim('—')} {archived_count} archived")
 
     # Last 5 runs.
     if db is not None:
@@ -760,28 +752,24 @@ def _status_detail(name: str, db) -> int:
     else:
         runs = []
 
-    tz_name = _local_tz_name()
-    print(f"recent runs (times in {tz_name}):")
     if runs:
-        run_header = ("time", "exit", "new", "failures")
-        run_rows: list[tuple[str, ...]] = [run_header]
-        for r in runs:
-            started = _local_ts(r[0]) if r[0] else "-"
-            run_rows.append((
-                started,
-                str(r[1]) if r[1] is not None else "-",
-                str(r[2]) if r[2] is not None else "-",
-                r[3] or "-",
-            ))
-        widths = [max(len(row[i]) for row in run_rows) for i in range(len(run_header))]
-        for idx, row in enumerate(run_rows):
-            print("  " + "  ".join(cell.ljust(widths[col]) for col, cell in enumerate(row)).rstrip())
-            if idx == 0:
-                print("  " + "  ".join("-" * w for w in widths).rstrip())
-    else:
-        print("  (no runs yet)")
-
-    print()
+        print()
+        print(ui.dim("  runs"))
+        times = [ui.local_ts(r[0]) if r[0] else "-" for r in runs]
+        time_width = max(map(len, times))
+        for r, started in zip(runs, times):
+            success = r[1] in (0, 101)
+            glyph = ui.green(ui.OK) if success else ui.red(ui.FAIL)
+            if success and r[2]:
+                outcome = ui.green(f"+{r[2]} new")
+            elif success:
+                outcome = ui.dim("nothing new")
+            else:
+                outcome = ui.red(f"failed (exit {r[1]})")
+                outcome += ui.dim(f" {ui.DOT} see kura logs {name}")
+            if r[3]:
+                outcome += ui.dim(f" {ui.DOT} {r[3]}")
+            print(f"  {glyph} {ui.pad(started, time_width)}   {outcome}")
 
     # Permanent failures.
     if db is not None:
@@ -797,15 +785,16 @@ def _status_detail(name: str, db) -> int:
     else:
         failures = []
 
-    print("permanent failures:")
     if failures:
+        print()
+        print(ui.dim("  failing permanently"))
         for vid_id, attempts, last_error in failures:
-            trunc = (last_error or "")[:80]
-            print(f"  {vid_id}  attempts={attempts}  {trunc}")
-    else:
-        print("  (none)")
-
-    print()
+            trunc = (last_error or "")[:60]
+            print(
+                f"  {ui.red(ui.FAIL)} {vid_id}   "
+                f"{ui.dim(f'{attempts} attempts {ui.DOT}')} {trunc}"
+            )
+        print(ui.dim(f"  suppress with `kura suppress {name} VIDEO_ID`"))
 
     # Suppressions.
     if db is not None:
@@ -820,14 +809,24 @@ def _status_detail(name: str, db) -> int:
     else:
         suppressions = []
 
-    print("suppressions:")
     if suppressions:
+        print()
+        print(ui.dim("  suppressed"))
         for key, suppressed_at, reason in suppressions:
-            ts = (suppressed_at or "")[:16].replace("T", " ")
-            reason_str = f"  ({reason})" if reason else ""
-            print(f"  {key}  {ts}{reason_str}")
+            date_text = ui.local_ts(suppressed_at, "%b %d") if suppressed_at else "-"
+            details = f"{ui.DOT} {date_text}"
+            if reason:
+                details = f"{ui.DOT} {reason} {ui.DOT} {date_text}"
+            print(f"  {ui.dim(ui.OFF)} {key} {ui.dim(details)}")
+
+    print()
+    if not source.enabled:
+        print(ui.dim(f"  paused — resume with `kura resume {name}`"))
+    elif source_state and source_state[0]:
+        next_due = compute_next_due(source.schedule, source_state[0])
+        print(ui.dim(f"  next check {ui.rel_time(next_due)}"))
     else:
-        print("  (none)")
+        print(ui.dim("  next check now"))
 
     return 0
 
@@ -838,13 +837,13 @@ def pause_command(args) -> int:
     try:
         config = load_config()
     except ConfigError as error:
-        print(f"error: {error}")
+        print(ui.red(f"{ui.FAIL} {error}"))
         return 1
 
     source = next((s for s in config.sources if s.name == name), None)
     if source is None:
         known = ", ".join(s.name for s in config.sources)
-        print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+        print(ui.red(f"{ui.FAIL} unknown source {name!r}" + (f"; known: {known}" if known else "")))
         return 1
 
     was = source.enabled
@@ -1025,24 +1024,24 @@ def logs_command(args) -> int:
     try:
         config = load_config()
     except ConfigError as error:
-        print(f"error: {error}")
+        print(ui.red(f"{ui.FAIL} {error}"))
         return 1
 
     source = next((s for s in config.sources if s.name == name), None)
     if source is None:
         known = ", ".join(s.name for s in config.sources)
-        print(f"error: unknown source {name!r}" + (f"; known: {known}" if known else ""))
+        print(ui.red(f"{ui.FAIL} unknown source {name!r}" + (f"; known: {known}" if known else "")))
         return 1
 
     # Find the most recent log file for this source.
     log_source_dir = paths.logs_dir() / name
     if not log_source_dir.is_dir():
-        print(f"no logs yet for {name!r}")
+        print(ui.dim(f"no logs yet for {name!r}"))
         return 0
 
     log_files = sorted(log_source_dir.glob("*.log"))
     if not log_files:
-        print(f"no logs yet for {name!r}")
+        print(ui.dim(f"no logs yet for {name!r}"))
         return 0
 
     latest_log = log_files[-1]
@@ -1055,7 +1054,7 @@ def logs_command(args) -> int:
     try:
         content = latest_log.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
-        print(f"error: cannot read log {latest_log}: {exc}")
+        print(ui.red(f"{ui.FAIL} cannot read log {latest_log}: {exc}"))
         return 1
 
     lines = content.splitlines()
@@ -1066,25 +1065,22 @@ def logs_command(args) -> int:
 
 
 def doctor_command(_args) -> int:
-    """Run a series of health checks and report ok/warn/FAIL for each.
+    """Run a series of health checks and report each with a status glyph.
 
     Exits 0 when no FAIL lines were emitted, 1 otherwise.
     """
     has_fail = False
 
     def ok(msg: str) -> None:
-        print(f"ok: {msg}")
+        print(f"{ui.green(ui.OK)} {msg}")
 
     def warn(msg: str) -> None:
-        print(f"warn: {msg}")
+        print(f"{ui.yellow('!')} {msg}")
 
     def fail(msg: str) -> None:
         nonlocal has_fail
         has_fail = True
-        print(f"FAIL: {msg}")
-
-    def info(msg: str) -> None:
-        print(f"info: {msg}")
+        print(f"{ui.red(ui.FAIL)} {msg}")
 
     # 1. yt-dlp on PATH.
     ytdlp_path = shutil.which("yt-dlp")
@@ -1099,7 +1095,7 @@ def doctor_command(_args) -> int:
                 timeout=15,
             )
             ytdlp_version = ver_result.stdout.strip()
-            ok(f"yt-dlp found: {ytdlp_version}")
+            ok(f"yt-dlp {ytdlp_version}")
             # Warn if the version date is older than 90 days.
             # yt-dlp versions are YYYY.MM.DD (optionally with .N suffix).
             import re as _re
@@ -1119,12 +1115,12 @@ def doctor_command(_args) -> int:
     if shutil.which("ffmpeg") is None:
         fail("ffmpeg not found on PATH (needed for embedding/merging)")
     else:
-        ok("ffmpeg found")
+        ok("ffmpeg")
 
     # 3. Config loads cleanly.
     try:
         config = load_config()
-        ok("config.yaml loads cleanly")
+        ok("config.yaml")
     except (ConfigError, Exception) as exc:
         fail(f"config.yaml: {exc}")
         return 1  # skip per-source checks
@@ -1132,7 +1128,7 @@ def doctor_command(_args) -> int:
     # 3a. notify-send / libnotify (only checked when notifications are enabled).
     if config.defaults.get("notify", True):
         if shutil.which("notify-send") is not None:
-            ok("notify-send found")
+            ok("notify-send")
         else:
             warn("notify-send not found — desktop notifications disabled (install libnotify)")
 
@@ -1151,7 +1147,7 @@ def doctor_command(_args) -> int:
                     timeout=15,
                 )
                 nn_version = nn_ver_result.stdout.strip()
-                ok(f"nndownload found: {nn_version}")
+                ok(f"nndownload {nn_version}")
             except Exception as exc:
                 fail(f"nndownload --version failed: {exc}")
                 nn_version = ""
@@ -1166,54 +1162,88 @@ def doctor_command(_args) -> int:
                 )
                 help_text = help_result.stdout + help_result.stderr
                 if "--download-archive" not in help_text:
-                    fail("unpatched nndownload: --download-archive not found in --help output")
+                    fail(
+                        "nndownload unpatched — reinstall from the clone "
+                        "(--download-archive missing)"
+                    )
                 else:
-                    ok("nndownload is patched (--download-archive present)")
+                    ok("nndownload patched")
             except Exception as exc:
                 fail(f"nndownload --help failed: {exc}")
 
     # 4. Per-source checks.
     for source in config.sources:
         prefix = f"source {source.name!r}"
+        checks: list[tuple[str, str]] = []
+
+        def source_ok(message: str) -> None:
+            checks.append(("ok", message))
+
+        def source_warn(message: str) -> None:
+            checks.append(("warn", message))
+
+        def source_fail(message: str) -> None:
+            checks.append(("fail", message))
 
         # output_dir.
         if not source.output_dir.exists():
-            warn(f"{prefix}: output_dir {source.output_dir} does not exist (will be created on run)")
+            source_warn(f"{prefix}: output_dir {source.output_dir} does not exist (will be created on run)")
         elif not os.access(source.output_dir, os.W_OK):
-            fail(f"{prefix}: output_dir {source.output_dir} exists but is not writable")
+            source_fail(f"{prefix}: output_dir {source.output_dir} exists but is not writable")
         else:
-            ok(f"{prefix}: output_dir {source.output_dir} is writable")
+            source_ok(f"{prefix}: output_dir {source.output_dir} is writable")
 
         # archive_file parent.
         archive_parent = source.archive_file.parent
         if not os.access(archive_parent, os.W_OK):
-            fail(f"{prefix}: archive_file parent {archive_parent} is not writable")
+            source_fail(f"{prefix}: archive_file parent {archive_parent} is not writable")
         else:
-            ok(f"{prefix}: archive_file parent is writable")
+            source_ok(f"{prefix}: archive_file parent is writable")
 
         # archive line count (informational).
+        archive_summary = "archive not created"
         if source.archive_file.exists():
             try:
                 line_count = sum(1 for _ in source.archive_file.open("r", encoding="utf-8", errors="replace"))
-                info(f"{prefix}: archive has {line_count} entries ({source.archive_file})")
+                archive_summary = f"archive {line_count} entries"
             except OSError:
-                warn(f"{prefix}: could not read archive file {source.archive_file}")
-        else:
-            info(f"{prefix}: archive file does not exist yet ({source.archive_file})")
+                source_warn(f"{prefix}: could not read archive file {source.archive_file}")
 
         # Profile.
         profile_path = paths.profile_file(paths.config_dir(), source.profile)
-        ok(f"{prefix}: profile {source.profile!r} → {profile_path}")
+        source_ok(f"{prefix}: profile {source.profile!r} → {profile_path}")
 
         # Cookies (ytdlp sources).
         if source.cookies:
-            _check_cookies(source.cookies, prefix, ok, warn, fail)
+            _check_cookies(source.cookies, prefix, source_ok, source_warn, source_fail)
 
         # nndownload per-source checks.
         if source.downloader == "nndownload":
             if source.auth:
-                ok(f"{prefix}: auth present")
-            _check_session_cookie(source.auth or "", prefix, ok, warn, fail)
+                source_ok(f"{prefix}: auth present")
+            _check_session_cookie(source.auth or "", prefix, source_ok, source_warn, source_fail)
+
+        problems = [(kind, message) for kind, message in checks if kind != "ok"]
+        if problems:
+            for kind, message in problems:
+                (warn if kind == "warn" else fail)(message)
+            continue
+
+        auth_summary = ""
+        auth_text = source.cookies or source.auth or ""
+        try:
+            auth_parts = shlex.split(auth_text)
+        except ValueError:
+            auth_parts = []
+        if "--cookies-from-browser" in auth_parts:
+            index = auth_parts.index("--cookies-from-browser")
+            auth_summary = f" {ui.DOT} cookies from {auth_parts[index + 1]}"
+        elif "--cookies" in auth_parts:
+            auth_summary = f" {ui.DOT} cookies file"
+        elif "--session-cookie" in auth_parts:
+            auth_summary = f" {ui.DOT} session cookie"
+        trailing = ui.dim(f"— output dir writable {ui.DOT} {archive_summary}{auth_summary}")
+        ok(f"{ui.bold(source.name)} {trailing}")
 
     # 5. state.db integrity.
     db_path = paths.state_db()
@@ -1235,7 +1265,7 @@ def doctor_command(_args) -> int:
     for source in config.sources:
         with source_lock(source.name, paths.state_dir()) as acquired:
             if not acquired:
-                info(f"{source.name!r} appears to be running right now")
+                warn(f"{source.name} — appears to be running right now")
             # Lock is released immediately when acquired — harmless.
 
     # 7. systemd timer status.
@@ -1254,7 +1284,7 @@ def doctor_command(_args) -> int:
             if status == "active":
                 ok("kura.timer is active")
             else:
-                warn(f"kura.timer is {status!r} — scheduling not enabled (see README)")
+                warn(f"kura.timer {status} — scheduling not enabled (see README)")
         except Exception as exc:
             warn(f"could not query kura.timer: {exc}")
 
@@ -1329,5 +1359,5 @@ def stub_command(command: str, note: str):
 
 
 def handle_config_error(error: ConfigError) -> int:
-    print(f"error: {error}")
+    print(ui.red(f"{ui.FAIL} {error}"))
     return 1

@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import archive, notify, paths, state
+from . import archive, notify, paths, state, ui
 from .config import Source, load_nnconf, parse_duration
 from .failures import classify_line, classify_nndownload_failure, parse_result_line
 from .locks import source_lock
@@ -227,6 +227,7 @@ def run_source(
     *,
     quiet: bool = False,
     notify: bool = True,
+    summary_indent: str = "",
 ) -> int | None:
     """Execute yt-dlp for *source*, stream output, and persist run state.
 
@@ -248,9 +249,16 @@ def run_source(
     """
     with source_lock(source.name, state_dir) as acquired:
         if not acquired:
-            print(f"skipped: {source.name} is already running")
+            print(ui.dim(f"{summary_indent}{source.name} — skipped, already running"))
             return None
-        return _run_source_locked(source, config_dir, state_dir, quiet=quiet, notify=notify)
+        return _run_source_locked(
+            source,
+            config_dir,
+            state_dir,
+            quiet=quiet,
+            notify=notify,
+            summary_indent=summary_indent,
+        )
 
 
 def _run_source_locked(
@@ -260,6 +268,7 @@ def _run_source_locked(
     *,
     quiet: bool = False,
     notify: bool = True,
+    summary_indent: str = "",
 ) -> int:
     """Inner implementation of run_source; called with the lock already held."""
     # 1. Ensure directories exist.
@@ -285,12 +294,18 @@ def _run_source_locked(
         last_full_run_at = ss_row[0] if ss_row else None
 
         if _is_promotion_due(last_full_run_at, interval_secs):
-            print("promoted to full reindex")
+            print(ui.dim("promoted to full reindex"))
             effective_strategy = "full"
 
     # 4. Handle rss strategy (before invoking yt-dlp).
     if effective_strategy == "rss":
-        rss_result = _try_rss_check(source, db, state_dir, log_source_dir)
+        rss_result = _try_rss_check(
+            source,
+            db,
+            state_dir,
+            log_source_dir,
+            summary_indent=summary_indent,
+        )
         if rss_result is not None:
             db.close()
             return rss_result
@@ -344,8 +359,6 @@ def _run_source_locked(
 
     # 9. Open log file and write header.
     output_lines: list[str] = []
-    if quiet:
-        print(f"{source.name}: started")
     with log_path.open("w", encoding="utf-8") as log_file:
         header = shlex.join(cmd) + f"  started_at={started_at.isoformat()}"
         log_file.write(header + "\n")
@@ -457,10 +470,51 @@ def _run_source_locked(
     db.close()
 
     # 15. Print summary.
-    print(f"exit={exit_code}  new={new_count}  log={log_path}")
+    _print_run_summary(
+        source.name,
+        exit_code,
+        new_count,
+        started_at,
+        ended_at,
+        log_path,
+        summary_indent,
+    )
 
     # 16. Return actual exit code (caller does sys.exit(min(1, exit_code))).
     return exit_code
+
+
+def _print_run_summary(
+    name: str,
+    exit_code: int,
+    new_count: int,
+    started_at: datetime,
+    ended_at: datetime,
+    log_path: Path | None,
+    indent: str = "",
+) -> None:
+    display_path = str(log_path) if log_path is not None else None
+    home = str(Path.home())
+    if display_path and (display_path == home or display_path.startswith(home + "/")):
+        display_path = "~" + display_path[len(home):]
+
+    glyph = ui.green(ui.OK) if exit_code in (0, 101) else ui.red(ui.FAIL)
+    prefix = f"{indent}{glyph} {ui.bold(name)} {ui.dim('—')} "
+    if exit_code in (0, 101):
+        # Display whole elapsed seconds consistently; sub-second runs show 0s.
+        elapsed = max(0, int((ended_at - started_at).total_seconds()))
+        duration = f"{elapsed}s" if elapsed < 60 else f"{elapsed // 60}m {elapsed % 60}s"
+        metadata = f" {ui.DOT} {duration}"
+        if display_path:
+            metadata += f" {ui.DOT} log {display_path}"
+        if new_count:
+            tail = ui.green(f"{new_count} new") + ui.dim(metadata)
+        else:
+            tail = ui.dim(f"nothing new{metadata}")
+    else:
+        metadata = f" {ui.DOT} log {display_path}" if display_path else ""
+        tail = ui.red(f"failed (exit {exit_code})") + ui.dim(metadata)
+    print(prefix + tail)
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +527,8 @@ def _try_rss_check(
     db: object,  # sqlite3.Connection
     state_dir: Path,
     log_source_dir: Path,
+    *,
+    summary_indent: str = "",
 ) -> int | None:
     """Attempt an RSS-only check.
 
@@ -485,18 +541,18 @@ def _try_rss_check(
         with db:
             channel_id = _resolve_channel_id(source, db)
     except Exception as exc:
-        print(f"rss: warning: channel_id resolution failed: {exc}; falling through to quick")
+        print(ui.yellow(f"! rss channel_id resolution failed: {exc}; falling through to quick"))
         return None
 
     if channel_id is None:
-        print("rss: warning: could not resolve channel_id; falling through to quick")
+        print(ui.yellow("! rss could not resolve channel_id; falling through to quick"))
         return None
 
     # Fetch feed.
     try:
         feed_video_ids = _fetch_rss_video_ids(channel_id)
     except Exception as exc:
-        print(f"rss: warning: feed fetch failed: {exc}; falling through to quick")
+        print(ui.yellow(f"! rss feed fetch failed: {exc}; falling through to quick"))
         return None
 
     # Check which are already archived.
@@ -508,7 +564,7 @@ def _try_rss_check(
         return None
 
     # All known — record a runs row and update last_check_at.
-    print("rss: nothing new")
+    started_at = datetime.now(tz=timezone.utc)
     ended_at = datetime.now(tz=timezone.utc)
 
     with db:
@@ -540,6 +596,15 @@ def _try_rss_check(
             (source.name, ended_at.isoformat()),
         )
 
+    _print_run_summary(
+        source.name,
+        0,
+        0,
+        started_at,
+        ended_at,
+        None,
+        summary_indent,
+    )
     return 0
 
 

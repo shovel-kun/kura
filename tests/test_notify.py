@@ -389,7 +389,7 @@ sources:
     assert exit_code == 0
 
     out = capsys.readouterr().out
-    assert "rss: nothing new" in out
+    assert "✓ test-src — nothing new" in out
     assert _read_calls(capture_file) == []
 
 
@@ -482,7 +482,7 @@ def test_doctor_reports_notify_send_found(monkeypatch, tmp_path: Path, capsys) -
 
     main(["doctor"])
     out = capsys.readouterr().out
-    assert "ok: notify-send found" in out
+    assert "✓ notify-send" in out
     # doctor only checks presence — must never invoke it.
     assert _read_calls(capture_file) == []
 
@@ -501,7 +501,7 @@ def test_doctor_warns_when_notify_send_missing(monkeypatch, tmp_path: Path, caps
 
     main(["doctor"])
     out = capsys.readouterr().out
-    assert "warn: notify-send not found" in out
+    assert "! notify-send not found" in out
     assert "libnotify" in out
 
 

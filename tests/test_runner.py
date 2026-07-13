@@ -4,18 +4,48 @@ import os
 import sqlite3
 import stat
 import textwrap
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from kura.cli import main
 from kura.config import Source
-from kura.runner import build_command, run_source
+from kura.runner import _print_run_summary, build_command, run_source
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def test_run_summary_formats_duration_and_home_path(capsys) -> None:
+    started = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
+    _print_run_summary(
+        "test-channel",
+        0,
+        16,
+        started,
+        started + timedelta(minutes=8, seconds=12),
+        Path.home() / ".local/state/kura/logs/test-channel/run.log",
+    )
+    assert capsys.readouterr().out == (
+        "✓ test-channel — 16 new · 8m 12s · "
+        "log ~/.local/state/kura/logs/test-channel/run.log\n"
+    )
+
+
+def test_failed_run_summary_omits_duration(capsys) -> None:
+    started = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
+    _print_run_summary(
+        "test-channel",
+        3,
+        0,
+        started,
+        started + timedelta(minutes=8),
+        Path("/tmp/run.log"),
+    )
+    assert capsys.readouterr().out == "✗ test-channel — failed (exit 3) · log /tmp/run.log\n"
 
 
 def set_kura_dirs(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
@@ -217,8 +247,7 @@ def test_run_source_exit0_two_archive_lines(monkeypatch, tmp_path: Path, capsys)
     assert exit_code == 0
 
     captured = capsys.readouterr()
-    assert "exit=0" in captured.out
-    assert "new=2" in captured.out
+    assert "✓ test-src — 2 new" in captured.out
 
     db_path = state_dir / "state.db"
     with sqlite3.connect(db_path) as conn:
@@ -307,8 +336,8 @@ def test_verify_fake_ytdlp_three_lines(monkeypatch, tmp_path: Path, capsys) -> N
     assert result == 0
 
     captured = capsys.readouterr()
-    assert "pending: 3" in captured.out
-    assert "pending = items yt-dlp would download now" in captured.out
+    assert "test-src — 3 pending" in captured.out
+    assert "  abc001  First video" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -343,13 +372,11 @@ def test_status_table(monkeypatch, tmp_path: Path, capsys) -> None:
 
     # Source name appears in table.
     assert "test-src" in output
-    # Enabled = yes.
-    assert "yes" in output
-    # Exit code 0.
-    assert " 0 " in output or output.count("0") >= 1
+    assert "● test-src" in output
+    assert "✓ +1 new" in output
     # next_due is a parseable timestamp or "now".
     lines = [line for line in output.splitlines() if "test-src" in line]
     assert len(lines) == 1
     source_line = lines[0]
     # The line should contain a date or "now".
-    assert "202" in source_line or "now" in source_line
+    assert "next in" in source_line or "next now" in source_line

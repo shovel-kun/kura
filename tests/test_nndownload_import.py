@@ -435,7 +435,7 @@ class TestImportMixedTree:
         out = capsys.readouterr().out
 
         # The media file should NOT appear as unverifiable
-        assert "UNVERIFIABLE" not in out or f"{stem}.mp4" not in out
+        assert "unverifiable media" not in out or f"{stem}.mp4" not in out
 
     def test_import_media_with_only_comments_json_is_unverifiable(
         self, monkeypatch, tmp_path: Path, capsys
@@ -457,7 +457,7 @@ class TestImportMixedTree:
 
         assert main(["import", "yt-src"]) == 0
         out = capsys.readouterr().out
-        assert "UNVERIFIABLE" in out
+        assert "unverifiable media" in out
         assert "vid.mp4" in out
 
     def test_import_dry_run_nn_no_changes(
@@ -477,7 +477,7 @@ class TestImportMixedTree:
 
         assert main(["import", "yt-src", "--dry-run"]) == 0
         out = capsys.readouterr().out
-        assert "would append:" in out
+        assert "would append" in out
 
         archive_path = output_dir / "archive.txt"
         assert not archive_path.exists()
@@ -501,7 +501,7 @@ class TestImportMixedTree:
 
         assert main(["import", "yt-src"]) == 0
         out = capsys.readouterr().out
-        assert "appended:                 0" in out
+        assert "appended   0" in out
 
     def test_import_nn_dedupe_same_id_two_sidecars(
         self, monkeypatch, tmp_path: Path, capsys
@@ -551,7 +551,7 @@ class TestImportMixedTree:
             assert key in content
 
         # comments-only video is unverifiable
-        assert "UNVERIFIABLE" in out
+        assert "unverifiable media" in out
         assert meta["unverifiable_name"] in out
 
         # No spurious warnings about unrelated.json

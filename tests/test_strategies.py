@@ -821,7 +821,7 @@ class TestRssStrategy:
         assert result == 0
 
         out = capsys.readouterr().out
-        assert "rss: nothing new" in out
+        assert "✓ test-src — nothing new" in out
 
         # No download call should have been made.
         download_calls = self._get_download_calls(argv_file)
@@ -915,7 +915,7 @@ class TestRssStrategy:
         assert result == 0
 
         out = capsys.readouterr().out
-        assert "rss: warning" in out
+        assert "! rss feed fetch failed" in out
 
         # Should have fallen through to a download call.
         download_calls = self._get_download_calls(argv_file)
@@ -1201,9 +1201,54 @@ class TestStatusDetail:
 
         out = capsys.readouterr().out
         assert "test-src" in out
-        assert "recent runs" in out.lower()
-        assert "permanent failures" in out.lower()
-        assert "suppressions" in out.lower()
+        assert "https://example.com/ch" in out
+        assert "0 archived" in out
+        assert "next check now" in out
+
+    def test_status_name_shows_runs_failures_and_suppressions(
+        self, monkeypatch, tmp_path, capsys
+    ) -> None:
+        """The detail view renders every populated section with the new glyph vocabulary."""
+        _config_dir, state_dir, output_dir = self._setup(monkeypatch, tmp_path)
+        (output_dir / "archive.txt").write_text("youtube one\nyoutube two\n")
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(state_dir / "state.db") as conn:
+            conn.execute(
+                "INSERT INTO source_state (source, last_check_at, imported_at) VALUES (?, ?, ?)",
+                ("test-src", now, "2026-07-01T00:00:00+00:00"),
+            )
+            conn.execute(
+                """
+                INSERT INTO runs
+                    (source, started_at, ended_at, exit_code, new_count, failure_summary)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("test-src", now, now, 0, 2, "1 transient"),
+            )
+            conn.execute(
+                """
+                INSERT INTO video_failures
+                    (source, video_id, kind, attempts, last_error)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("test-src", "abc123", "permanent", 4, "Join this channel to get access"),
+            )
+            conn.execute(
+                "INSERT INTO suppressions (source, archive_key, suppressed_at, reason) VALUES (?, ?, ?, ?)",
+                ("test-src", "youtube old", "2026-07-01T00:00:00+00:00", "deleted"),
+            )
+
+        assert main(["status", "test-src"]) == 0
+        out = capsys.readouterr().out
+        assert "● enabled · full · every 6h · av1-archive · imported Jul 01" in out
+        assert f"{output_dir} — 2 archived" in out
+        assert "  runs" in out
+        assert "✓ " in out and "+2 new · 1 transient" in out
+        assert "failing permanently" in out
+        assert "✗ abc123   4 attempts · Join this channel to get access" in out
+        assert "suppress with `kura suppress test-src VIDEO_ID`" in out
+        assert "○ youtube old · deleted · Jul 01" in out
+        assert "next check in" in out
 
     def test_status_name_unknown_source_exits_1(self, monkeypatch, tmp_path, capsys) -> None:
         """kura status UNKNOWN exits 1."""
@@ -1212,15 +1257,17 @@ class TestStatusDetail:
         result = main(["status", "no-such-source"])
         assert result == 1
 
-    def test_status_table_includes_fails_column(self, monkeypatch, tmp_path, capsys) -> None:
-        """kura status (no name) includes a 'fails' column header."""
+    def test_status_overview_shows_source_state(self, monkeypatch, tmp_path, capsys) -> None:
+        """kura status shows the source and its never-run state."""
         self._setup(monkeypatch, tmp_path)
 
         result = main(["status"])
         assert result == 0
 
         out = capsys.readouterr().out
-        assert "fails" in out
+        assert "kura · 1 source" in out
+        assert "● test-src" in out
+        assert "never run" in out
 
     def test_status_table_hint_when_permanent_failures(self, monkeypatch, tmp_path, capsys) -> None:
         """Summary table shows hint when a source has >= 3-attempt permanent failures."""
@@ -1240,5 +1287,5 @@ class TestStatusDetail:
         assert result == 0
 
         out = capsys.readouterr().out
-        assert "permanent failures detected" in out
-        assert "kura suppress" in out
+        assert "1 failing" in out
+        assert "run `kura status NAME` for failure details" in out

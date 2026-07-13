@@ -270,15 +270,15 @@ def test_import_full_tree(monkeypatch, tmp_path: Path, capsys) -> None:
 
     out = capsys.readouterr().out
     assert "scanned" in out
-    assert "appended:                 2" in out
-    assert "already in archive:       1" in out
+    assert "  appended   2" in out
+    assert "  in archive 1" in out
 
     # Unverifiable media files reported.
-    assert "UNVERIFIABLE" in out
+    assert "unverifiable media" in out
     assert "some_video.mkv" in out
 
     # Orphan reported but not removed.
-    assert "Orphan archive entries: 1" in out
+    assert "1 orphan archive entry kept" in out
 
     # Corrupt JSON warned.
     assert "unparseable" in out.lower() or "Warnings" in out
@@ -324,7 +324,7 @@ def test_import_dry_run_no_changes(monkeypatch, tmp_path: Path, capsys) -> None:
     assert main(["import", "test-src", "--dry-run"]) == 0
 
     out = capsys.readouterr().out
-    assert "would append:             2" in out
+    assert "would append 2" in out
 
     # No files changed.
     after_files = {p: p.stat().st_mtime for p in output_dir.rglob("*") if p.is_file()}
@@ -360,7 +360,7 @@ def test_import_idempotent(monkeypatch, tmp_path: Path, capsys) -> None:
 
     assert main(["import", "test-src"]) == 0
     out = capsys.readouterr().out
-    assert "appended:                 0" in out
+    assert "appended   0" in out
 
 
 def test_import_creates_archive_when_absent(monkeypatch, tmp_path: Path, capsys) -> None:
