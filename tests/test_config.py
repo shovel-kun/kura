@@ -55,6 +55,25 @@ def test_defaults_materialized(config_dir: Path) -> None:
     assert source.enabled is True
 
 
+def test_notify_defaults_to_true(config_dir: Path) -> None:
+    config = config_from_data(base_config(valid_source()), config_dir)
+    assert config.defaults["notify"] is True
+
+
+def test_notify_can_be_disabled(config_dir: Path) -> None:
+    data = base_config(valid_source())
+    data["defaults"]["notify"] = False
+    config = config_from_data(data, config_dir)
+    assert config.defaults["notify"] is False
+
+
+def test_notify_rejects_non_bool(config_dir: Path) -> None:
+    data = base_config(valid_source())
+    data["defaults"]["notify"] = "yes"
+    with pytest.raises(ConfigError, match="defaults.notify"):
+        config_from_data(data, config_dir)
+
+
 @pytest.mark.parametrize(
     ("source", "message"),
     [

@@ -143,6 +143,7 @@ def config_from_data(data: Any, config_dir: Path | None = None) -> Config:
         "update_strategy": DEFAULT_UPDATE_STRATEGY,
         "full_reindex_every": DEFAULT_FULL_REINDEX_EVERY,
         "concurrency": 1,
+        "notify": True,
     }
     defaults.update(data.get("defaults") or {})
 
@@ -164,6 +165,12 @@ def config_from_data(data: Any, config_dir: Path | None = None) -> Config:
             f"defaults.concurrency: must be between 1 and 8, got {concurrency}"
         )
     defaults["concurrency"] = concurrency
+
+    # Validate notify.
+    if not isinstance(defaults["notify"], bool):
+        raise ConfigError(
+            f"defaults.notify: must be true or false, got {defaults['notify']!r}"
+        )
 
     sources_data = data.get("sources") or []
     if not isinstance(sources_data, list):

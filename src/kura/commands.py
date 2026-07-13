@@ -443,7 +443,8 @@ def run_command(args) -> int:
             print(f"error: source {name!r} is disabled; use --force to run it anyway")
             return 1
 
-        exit_code = run_source(source, paths.config_dir(), paths.state_dir())
+        notify_enabled = bool(config.defaults.get("notify", True))
+        exit_code = run_source(source, paths.config_dir(), paths.state_dir(), notify=notify_enabled)
         if exit_code is None:
             return 0  # locked → skip is not an error
         return 0 if exit_code in (0, 101) else 1
@@ -474,11 +475,12 @@ def run_command(args) -> int:
 
     # Run due sources — serially or concurrently based on config.
     concurrency: int = config.defaults.get("concurrency", 1)
+    notify_enabled = bool(config.defaults.get("notify", True))
 
     if concurrency <= 1 or len(due_sources) <= 1:
         # Serial path: stream output normally.
         for source in due_sources:
-            exit_code = run_source(source, paths.config_dir(), paths.state_dir())
+            exit_code = run_source(source, paths.config_dir(), paths.state_dir(), notify=notify_enabled)
             if exit_code is None:
                 print(f"  {source.name}: skipped (already running)")
             elif exit_code in (0, 101):
@@ -489,7 +491,9 @@ def run_command(args) -> int:
     else:
         # Concurrent path: run up to `concurrency` sources at once, quiet mode.
         def _run_one(src):
-            return src, run_source(src, paths.config_dir(), paths.state_dir(), quiet=True)
+            return src, run_source(
+                src, paths.config_dir(), paths.state_dir(), quiet=True, notify=notify_enabled
+            )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {pool.submit(_run_one, src): src for src in due_sources}
@@ -1124,6 +1128,13 @@ def doctor_command(_args) -> int:
     except (ConfigError, Exception) as exc:
         fail(f"config.yaml: {exc}")
         return 1  # skip per-source checks
+
+    # 3a. notify-send / libnotify (only checked when notifications are enabled).
+    if config.defaults.get("notify", True):
+        if shutil.which("notify-send") is not None:
+            ok("notify-send found")
+        else:
+            warn("notify-send not found — desktop notifications disabled (install libnotify)")
 
     # 3b. nndownload checks (only when at least one nndownload source exists).
     has_nndownload_sources = any(s.downloader == "nndownload" for s in config.sources)

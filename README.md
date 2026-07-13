@@ -92,6 +92,24 @@ Per-video failure records are stored in the `video_failures` table (with attempt
 
 The `kura status` summary table shows a `fails` column counting permanent failures with >= 3 attempts per source.
 
+## Notifications
+
+kura raises a Linux desktop notification (via `notify-send`/libnotify) after each source run when something worth knowing happened:
+
+- **Run failed** (exit code other than `0` or `101`) — a critical-urgency notification: `kura: NAME run failed` / `exit CODE — see kura logs NAME`.
+- **New videos archived** — `kura: NAME` / `N new video(s) archived` (with the failure summary appended if failures were also recorded that run).
+- **No new videos, but failures recorded** — `kura: NAME` / `no new videos; ...`.
+- **Nothing new and nothing failed** (including an `rss` strategy's no-op check) — no notification is sent.
+
+Notifications are best-effort: if `notify-send` is not installed, or sending fails for any reason, the run still succeeds silently. Set `notify: false` under `defaults` in `config.yaml` to disable them entirely:
+
+```yaml
+defaults:
+  notify: false
+```
+
+Requires libnotify (`notify-send` on PATH); `kura doctor` reports whether it is found. Because `kura run --due` normally executes inside a systemd user service (see [Scheduling](#scheduling)), which has no graphical session bus by default, kura falls back to `unix:path=$XDG_RUNTIME_DIR/bus` for `DBUS_SESSION_BUS_ADDRESS` when it isn't already set, so notifications still reach your desktop's notification daemon.
+
 ## Suppress / Unsuppress
 
 To permanently prevent a video from being downloaded (e.g. it has been removed and will never be available):

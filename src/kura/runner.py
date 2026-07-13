@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import archive, paths, state
+from . import archive, notify, paths, state
 from .config import Source, load_nnconf, parse_duration
 from .failures import classify_line, classify_nndownload_failure, parse_result_line
 from .locks import source_lock
@@ -226,6 +226,7 @@ def run_source(
     state_dir: Path,
     *,
     quiet: bool = False,
+    notify: bool = True,
 ) -> int | None:
     """Execute yt-dlp for *source*, stream output, and persist run state.
 
@@ -240,15 +241,26 @@ def run_source(
         receives all output).  Only the start and end summary lines are
         printed.  Used by concurrent multi-source runs to avoid interleaved
         output.
+    notify:
+        When *True* (the default), send a best-effort desktop notification
+        summarizing the run outcome (resolved from ``defaults.notify`` by
+        the CLI caller).  Set *False* to suppress notifications entirely.
     """
     with source_lock(source.name, state_dir) as acquired:
         if not acquired:
             print(f"skipped: {source.name} is already running")
             return None
-        return _run_source_locked(source, config_dir, state_dir, quiet=quiet)
+        return _run_source_locked(source, config_dir, state_dir, quiet=quiet, notify=notify)
 
 
-def _run_source_locked(source: Source, config_dir: Path, state_dir: Path, *, quiet: bool = False) -> int:
+def _run_source_locked(
+    source: Source,
+    config_dir: Path,
+    state_dir: Path,
+    *,
+    quiet: bool = False,
+    notify: bool = True,
+) -> int:
     """Inner implementation of run_source; called with the lock already held."""
     # 1. Ensure directories exist.
     source.output_dir.mkdir(parents=True, exist_ok=True)
@@ -367,6 +379,10 @@ def _run_source_locked(source: Source, config_dir: Path, state_dir: Path, *, qui
         failure_summary = _collect_nndownload_failures(source.name, output_lines, db)
     else:
         failure_summary = _collect_failures(source.name, output_lines, db)
+
+    # 12b. Send a best-effort desktop notification summarizing the outcome.
+    if notify:
+        _notify_run_outcome(source.name, exit_code, new_count, failure_summary)
 
     # 13. Insert runs row.
     ended_at = datetime.now(tz=timezone.utc)
@@ -525,6 +541,43 @@ def _try_rss_check(
         )
 
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Desktop notification
+# ---------------------------------------------------------------------------
+
+
+def _notify_run_outcome(
+    source_name: str,
+    exit_code: int,
+    new_count: int,
+    failure_summary: str | None,
+) -> None:
+    """Send a best-effort desktop notification summarizing a run outcome.
+
+    - A crashed process (nonzero exit, and not the yt-dlp "no more videos"
+      code 101) always raises a critical notification.
+    - Otherwise, notify only when something happened: new videos archived,
+      or failures were recorded.  A clean "nothing new" check stays silent.
+    """
+    if exit_code != 0 and exit_code != 101:
+        notify.send_notification(
+            f"kura: {source_name} run failed",
+            f"exit {exit_code} — see kura logs {source_name}",
+            critical=True,
+        )
+        return
+
+    if new_count > 0:
+        body = f"{new_count} new video(s) archived"
+        if failure_summary:
+            body += f", {failure_summary}"
+        notify.send_notification(f"kura: {source_name}", body)
+        return
+
+    if failure_summary:
+        notify.send_notification(f"kura: {source_name}", f"no new videos; {failure_summary}")
 
 
 # ---------------------------------------------------------------------------
