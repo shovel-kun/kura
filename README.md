@@ -15,6 +15,7 @@ kura run --due
 kura run --all
 kura verify NAME
 kura status [NAME]
+kura watch [NAME] [--once] [--interval SEC]
 kura pause NAME
 kura resume NAME
 kura suppress NAME VIDEO_ID [--reason TEXT] [--extractor EXT]
@@ -39,6 +40,12 @@ kura ui
 `kura status` prints a summary table for all configured sources showing enabled state, last-run timestamp, exit code, new item count, permanent failure count, and estimated next scheduled run.  When any source has >= 3 permanent failures a hint to use `kura suppress` is printed.
 
 `kura status NAME` prints a detailed view for one source: last 5 runs (time, exit, new, failure summary), permanent failures list (video_id, attempts, last error), and active suppressions.
+
+## Watching a live run
+
+`kura watch [NAME]` shows in-place progress for running sources, including download percentage, speed, ETA, and the current video. It attaches to any kura run detected through its source lock and live log, including runs started manually or by the systemd timer. Without `NAME`, it watches all enabled sources.
+
+Use `--once` to print one script-friendly snapshot and exit. Use `--interval SEC` to change the live polling interval from its 0.5-second default.
 
 `kura pause NAME` / `kura resume NAME` flip the `enabled` flag in `config.yaml`, preserving all comments and formatting.  A paused source is skipped by `run --due` and `run --all`.
 

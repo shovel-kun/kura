@@ -38,6 +38,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "croniter" },
+    { name = "rich" },
     { name = "ruamel-yaml" },
     { name = "textual" },
     { name = "yt-dlp" },
@@ -52,6 +53,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "croniter" },
+    { name = "rich", specifier = ">=13" },
     { name = "ruamel-yaml" },
     { name = "textual", specifier = ">=0.80" },
     { name = "yt-dlp" },

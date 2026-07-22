@@ -8,12 +8,15 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
 from croniter import croniter
+from rich.console import Console
+from rich.live import Live
 
-from . import paths, state, ui
+from . import monitor, paths, state, ui
 from .archive import (
     MEDIA_EXTENSIONS,
     append_archive_entries,
@@ -26,7 +29,9 @@ from .config import (
     DEFAULT_CONFIG_TEXT,
     DEFAULT_PROFILE_TEXT,
     NICONICO_PROFILE_TEXT,
+    Config,
     ConfigError,
+    Source,
     append_source,
     load_config,
     set_source_enabled,
@@ -601,6 +606,116 @@ def query_permanent_fails(db: sqlite3.Connection | None, name: str) -> int:
     return row[0] if row else 0
 
 
+def _progress_for_source(name: str, state_dir: Path) -> dict:
+    log_path = monitor.current_log(name, state_dir)
+    if log_path is None:
+        return monitor.parse_progress([])
+    return monitor.parse_progress(monitor.tail_lines(log_path))
+
+
+def _running_outcome(name: str, state_dir: Path) -> str:
+    pct = _progress_for_source(name, state_dir)["pct"]
+    suffix = f" {pct:g}%" if pct is not None else ""
+    return ui.yellow(f"{ui.ON} running{suffix}")
+
+
+def _watch_snapshots(
+    sources: list[Source],
+    running_names: set[str],
+    state_dir: Path,
+    archive_baselines: dict[str, int],
+) -> list[monitor.WatchSnapshot]:
+    snapshots: list[monitor.WatchSnapshot] = []
+    for source in sources:
+        archive_delta = max(
+            0,
+            monitor.archive_count(source.archive_file) - archive_baselines[source.name],
+        )
+        if source.name in running_names:
+            progress = _progress_for_source(source.name, state_dir)
+            snapshots.append(
+                monitor.WatchSnapshot(
+                    name=source.name,
+                    running=True,
+                    archive_delta=archive_delta,
+                    **progress,
+                )
+            )
+        else:
+            snapshots.append(
+                monitor.WatchSnapshot(
+                    name=source.name,
+                    running=False,
+                    archive_delta=archive_delta,
+                )
+            )
+    return snapshots
+
+
+def watch_command(args) -> int:
+    """Watch currently running sources by probing locks and tailing their logs."""
+    try:
+        config = load_config()
+    except ConfigError as error:
+        print(ui.red(f"{ui.FAIL} {error}"))
+        return 1
+
+    name: str | None = getattr(args, "name", None)
+    if name is not None:
+        source = next((source for source in config.sources if source.name == name), None)
+        if source is None:
+            known = ", ".join(source.name for source in config.sources)
+            print(ui.red(f"{ui.FAIL} unknown source {name!r}" + (f"; known: {known}" if known else "")))
+            return 1
+        sources = [source]
+    else:
+        sources = [source for source in config.sources if source.enabled]
+
+    state_dir = paths.state_dir()
+    archive_baselines = {
+        source.name: monitor.archive_count(source.archive_file) for source in sources
+    }
+    running_at_start = set(monitor.running_sources(config, state_dir))
+    selected_names = {source.name for source in sources}
+    running = running_at_start & selected_names
+
+    if getattr(args, "once", False) or not sys.stdout.isatty():
+        console = Console(file=sys.stdout, force_terminal=False, color_system=None)
+        snapshots = _watch_snapshots(sources, running, state_dir, archive_baselines)
+        console.print(monitor.render_watch(snapshots))
+        return 0
+
+    if not running:
+        print(ui.dim("nothing running · start a run with `kura run --all`"))
+        return 0
+
+    snapshots = _watch_snapshots(sources, running, state_dir, archive_baselines)
+    empty_polls = 0
+    console = Console(file=sys.stdout)
+    try:
+        with Live(
+            monitor.render_watch(snapshots),
+            console=console,
+            auto_refresh=False,
+        ) as live:
+            while empty_polls < 3:
+                time.sleep(args.interval)
+                running = set(monitor.running_sources(config, state_dir)) & selected_names
+                snapshots = _watch_snapshots(sources, running, state_dir, archive_baselines)
+                live.update(monitor.render_watch(snapshots), refresh=True)
+                empty_polls = empty_polls + 1 if not running else 0
+    except KeyboardInterrupt:
+        pass
+
+    for source in sources:
+        new_count = max(
+            0,
+            monitor.archive_count(source.archive_file) - archive_baselines[source.name],
+        )
+        print(f"{ui.green(ui.OK)} {source.name} {ui.dim('—')} +{new_count} new")
+    return 0
+
+
 def status_command(args) -> int:
     """Print a summary table of all sources, or detailed view for one source."""
     name: str | None = getattr(args, "name", None)
@@ -623,11 +738,13 @@ def status_command(args) -> int:
             if db is not None:
                 db.close()
             return 1
-        rc = _status_detail(source, db)
+        rc = _status_detail(source, db, config=config)
         if db is not None:
             db.close()
         return rc
 
+    state_dir = paths.state_dir()
+    running = set(monitor.running_sources(config, state_dir))
     rows: list[tuple[object, str, str]] = []
     any_permanent = False
     for source in config.sources:
@@ -637,7 +754,9 @@ def status_command(args) -> int:
         if pf > 0:
             any_permanent = True
 
-        if lr:
+        if source.name in running:
+            outcome = _running_outcome(source.name, state_dir)
+        elif lr:
             success = lr["exit_code"] in (0, 101)
             if success and lr["new_count"]:
                 outcome = ui.green(f"{ui.OK} +{lr['new_count']} new")
@@ -648,10 +767,11 @@ def status_command(args) -> int:
             outcome += ui.dim(f" {ui.DOT} {ui.rel_time(ui.local_dt(lr['ended_at']))}")
         else:
             outcome = ui.dim("never run")
-        if not ss.get("imported_at"):
-            outcome += " " + ui.yellow("not imported")
-        if pf:
-            outcome += " " + ui.red(f"{pf} failing")
+        if source.name not in running:
+            if not ss.get("imported_at"):
+                outcome += " " + ui.yellow("not imported")
+            if pf:
+                outcome += " " + ui.red(f"{pf} failing")
 
         if source.enabled:
             last_check_at = ss.get("last_check_at")
@@ -687,9 +807,12 @@ def status_command(args) -> int:
     return 0
 
 
-def _status_detail(source, db) -> int:
+def _status_detail(source, db, *, config: Config | None = None) -> int:
     """Print detailed view for a single source."""
     name = source.name
+    config = config or load_config()
+    state_dir = paths.state_dir()
+    running = name in monitor.running_sources(config, state_dir)
     source_state = None
     if db is not None:
         source_state = db.execute(
@@ -713,6 +836,8 @@ def _status_detail(source, db) -> int:
             1 for _ in source.archive_file.open("r", encoding="utf-8", errors="replace")
         )
     print(f"  {source.output_dir} {ui.dim('—')} {archived_count} archived")
+    if running:
+        print(f"  {_running_outcome(name, state_dir)}")
 
     # Last 5 runs.
     if db is not None:

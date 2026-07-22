@@ -20,6 +20,7 @@ from .commands import (
     suppress_command,
     unsuppress_command,
     verify_command,
+    watch_command,
 )
 from .config import ConfigError
 from .library import search_command, show_command
@@ -91,6 +92,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="source name for detailed view (optional)",
     )
     status_parser.set_defaults(func=status_command)
+
+    watch_parser = subcommands.add_parser("watch", help="watch live progress for running sources")
+    watch_parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="source name to watch (default: all enabled sources)",
+    )
+    watch_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="print one snapshot and exit",
+    )
+    watch_parser.add_argument(
+        "--interval",
+        type=float,
+        default=0.5,
+        metavar="SEC",
+        help="polling interval in seconds (default: 0.5)",
+    )
+    watch_parser.set_defaults(func=watch_command)
 
     pause_parser = subcommands.add_parser("pause", help="disable a source (pause scheduling)")
     pause_parser.add_argument("name", help="source name as defined in config.yaml")
