@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sqlite3
 from pathlib import Path
 
@@ -87,3 +88,26 @@ def test_doctor_without_config_reports_fail(monkeypatch, tmp_path: Path, capsys)
     out = capsys.readouterr().out
     assert rc == 1
     assert "✗ config.yaml" in out
+
+
+def test_overview_covers_every_subcommand():
+    """The bare-`kura` overview must list every registered subcommand."""
+    from kura import cli
+
+    parser = cli.build_parser()
+    subactions = [
+        a for a in parser._actions
+        if isinstance(a, argparse._SubParsersAction)
+    ]
+    registered = set(subactions[0].choices.keys())
+    listed = {cmd for _title, cmds in cli._COMMAND_GROUPS for cmd, _desc in cmds}
+    assert registered == listed, f"overview drift: {registered ^ listed}"
+
+
+def test_bare_invocation_prints_overview_exit_0(capsys):
+    from kura import cli
+
+    assert cli.main([]) == 0
+    out = capsys.readouterr().out
+    assert "archive orchestrator" in out
+    assert "run" in out and "search" in out

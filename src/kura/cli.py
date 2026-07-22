@@ -265,6 +265,53 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_COMMAND_GROUPS = [
+    ("Setup", [
+        ("init", "create config, profiles, and the state database"),
+        ("add", "add a channel or playlist source"),
+        ("import", "adopt an existing archive directory"),
+    ]),
+    ("Archiving", [
+        ("run", "download new videos (NAME, --due, or --all)"),
+        ("verify", "show what would download, without downloading"),
+        ("watch", "live progress of a running download"),
+        ("pause", "pause a source's schedule"),
+        ("resume", "resume a source's schedule"),
+    ]),
+    ("Library", [
+        ("list", "list configured sources"),
+        ("status", "source overview and recent runs"),
+        ("search", "search the archived video library"),
+        ("show", "show details for one video"),
+        ("ui", "interactive terminal browser"),
+        ("logs", "view a source's run log"),
+    ]),
+    ("Maintenance", [
+        ("suppress", "mark a video as archived (skip future downloads)"),
+        ("unsuppress", "undo a suppression"),
+        ("doctor", "check environment health"),
+    ]),
+]
+
+
+def _print_overview() -> None:
+    try:
+        version = importlib.metadata.version("kura")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unknown"
+    print(f"{ui.bold('kura')} {ui.dim(f'· YouTube/niconico archive orchestrator · {version}')}")
+    print()
+    print(f"{ui.dim('usage:')} kura {ui.cyan('<command>')} [options]")
+    width = max(len(cmd) for _, cmds in _COMMAND_GROUPS for cmd, _ in cmds)
+    for title, cmds in _COMMAND_GROUPS:
+        print()
+        print(f"  {ui.bold(title)}")
+        for cmd, desc in cmds:
+            print(f"    {ui.cyan(ui.pad(cmd, width))}   {ui.dim(desc)}")
+    print()
+    print(ui.dim("run `kura <command> -h` for details on any command"))
+
+
 def _run_command_wrapper(args) -> int:
     """Validate run-mode flag combinations then delegate to run_command."""
     force: bool = args.force
@@ -293,6 +340,14 @@ def _ui_command(_args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] in ("help", "-h", "--help"):
+        # `kura help CMD` → that command's detailed argparse help.
+        if argv and argv[0] == "help" and len(argv) > 1:
+            return main([argv[1], "--help"])
+        _print_overview()
+        return 0
+
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
