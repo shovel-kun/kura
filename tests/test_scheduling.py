@@ -201,21 +201,13 @@ class TestRunDue:
         config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
-        # src-b ran 1 hour ago — not due on a 6h schedule
-        recent_ts = datetime(2024, 6, 1, 11, 0, 0, tzinfo=timezone.utc).isoformat()
-        set_last_check_at(db_path, "src-b", recent_ts)
-
-        # Freeze "now" by patching datetime in commands module so src-b is not due
-        # We do this by setting last_check_at only 1h ago relative to the real now,
-        # but the 6h schedule means src-a (NULL) is due and src-b is not.
+        # src-b just checked → reliably not due on a 6h schedule. (croniter's next
+        # fire is always strictly after the last check, so "just now" is never due
+        # until the next boundary; a fixed "1 hour ago" is flaky because a 6h cron
+        # boundary can fall within that hour, making the source due.)
         # src-a has no last_check_at → due immediately.
-        # src-b last_check_at just set to 1 hour ago (real clock) → not due.
-        import kura.commands as cmd_mod
-        real_now = datetime.now(tz=timezone.utc)
-        one_hour_ago = real_now.replace(
-            hour=(real_now.hour - 1) % 24,
-        ).isoformat()
-        set_last_check_at(db_path, "src-b", one_hour_ago)
+        recent = datetime.now(tz=timezone.utc).isoformat()
+        set_last_check_at(db_path, "src-b", recent)
 
         result = main(["run", "--due"])
         assert result == 0
@@ -239,9 +231,8 @@ class TestRunDue:
         config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
-        real_now = datetime.now(tz=timezone.utc)
-        one_hour_ago = real_now.replace(hour=(real_now.hour - 1) % 24).isoformat()
-        set_last_check_at(db_path, "src-b", one_hour_ago)
+        recent = datetime.now(tz=timezone.utc).isoformat()
+        set_last_check_at(db_path, "src-b", recent)
 
         main(["run", "--due"])
 
@@ -255,9 +246,9 @@ class TestRunDue:
 
         # src-a ran → last_check_at updated
         assert row_a is not None and row_a[0] is not None
-        # src-b was NOT run → last_check_at unchanged (still one_hour_ago)
+        # src-b was NOT run → last_check_at unchanged (still `recent`)
         assert row_b is not None
-        assert row_b[0][:16] == one_hour_ago[:16]
+        assert row_b[0][:16] == recent[:16]
 
     def test_run_all_runs_both_enabled_sources(self, monkeypatch, tmp_path):
         """--all runs both enabled sources regardless of schedule."""

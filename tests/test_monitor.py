@@ -59,6 +59,27 @@ def make_source(tmp_path: Path, name: str, *, enabled: bool = True) -> Source:
             {"phase": "comments"},
         ),
         (
+            [
+                "[download] 100% of    1.19GiB in 00:04:26 at 4.56MiB/s",
+                '[FixupM3u8] Fixing MPEG-TS in MP4 container of "vid [abc].mp4"',
+            ],
+            {"phase": "remuxing", "pct": None, "speed": None, "eta": None},
+        ),
+        (
+            [
+                "[download] 100% of 50.0MiB in 00:10",
+                "[Merger] Merging formats into \"vid [abc].mkv\"",
+            ],
+            {"phase": "merging", "pct": None},
+        ),
+        (
+            [
+                "[download] 100% of 50.0MiB in 00:10",
+                "[EmbedThumbnail] Adding thumbnail to \"vid [abc].mkv\"",
+            ],
+            {"phase": "embedding", "pct": None},
+        ),
+        (
             [],
             {
                 "pct": None,

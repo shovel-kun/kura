@@ -853,11 +853,11 @@ class TestLocalTimeDisplay:
         make_config_yaml(config_dir, output_dir)
         assert main(["init"]) == 0
 
-        # Set last_check_at to 1 hour ago so it's not due (6h schedule).
+        # Mark it as just checked → reliably not due on a 6h schedule (a fixed
+        # "1 hour ago" is flaky since a 6h cron boundary can fall within that hour).
         import kura.state as st
         db_path = state_dir / "state.db"
-        real_now = datetime.now(tz=timezone.utc)
-        one_hour_ago = real_now.replace(hour=(real_now.hour - 1) % 24).isoformat()
+        recent = datetime.now(tz=timezone.utc).isoformat()
         with st.connect(db_path) as conn:
             conn.execute(
                 """
@@ -865,7 +865,7 @@ class TestLocalTimeDisplay:
                 VALUES (?, ?)
                 ON CONFLICT(source) DO UPDATE SET last_check_at = excluded.last_check_at
                 """,
-                ("test-src", one_hour_ago),
+                ("test-src", recent),
             )
 
         bin_dir = tmp_path / "bin"

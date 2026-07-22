@@ -124,8 +124,29 @@ def parse_progress(lines: list[str]) -> dict[str, Any]:
         if "downloading comments" in lower or "comment api" in lower:
             phase = "comments"
             break
-        if "writing video metadata" in lower or ("writing " in lower and " to:" in lower):
+        # Post-download processing steps have no progress bar; recognise them so
+        # the display shows what yt-dlp is doing instead of a frozen 100%.
+        if lower.startswith("[fixup") or ("fixing" in lower and "container" in lower):
+            phase = "remuxing"
+            break
+        if "[merger]" in lower or "merging formats" in lower:
+            phase = "merging"
+            break
+        if (
+            "[embedthumbnail]" in lower
+            or "[thumbnailsconvertor]" in lower
+            or "[embedsubtitle]" in lower
+        ):
+            phase = "embedding"
+            break
+        if "[sponsorblock]" in lower:
+            phase = "sponsorblock"
+            break
+        if "[metadata]" in lower or "writing video metadata" in lower or ("writing " in lower and " to:" in lower):
             phase = "metadata"
+            break
+        if "deleting original file" in lower:
+            phase = "processing"
             break
         if _PROGRESS_RE.search(line):
             phase = "downloading"
@@ -133,6 +154,12 @@ def parse_progress(lines: list[str]) -> dict[str, Any]:
         if "has already been recorded" in lower:
             phase = "skipping"
             break
+
+    # Only an active download shows the progress bar. During any post-download
+    # phase (remux/merge/embed/comments/…), the last progress line is a stale
+    # 100% — clear it so the view shows "… <phase>" rather than a frozen bar.
+    if phase != "downloading":
+        pct = speed = eta = size = None
 
     return {
         "pct": pct,
