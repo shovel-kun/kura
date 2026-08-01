@@ -112,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SEC",
         help="polling interval in seconds (default: 0.5)",
     )
+    watch_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="wait for a run to start instead of exiting when nothing is running",
+    )
     watch_parser.set_defaults(func=watch_command)
 
     pause_parser = subcommands.add_parser("pause", help="disable a source (pause scheduling)")

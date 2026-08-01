@@ -119,6 +119,60 @@ def test_watch_interactive_with_nothing_running_exits_immediately(
     assert "nothing running" in capsys.readouterr().out
 
 
+def test_watch_wait_polls_until_a_run_starts(monkeypatch, tmp_path: Path, capsys) -> None:
+    """--wait should keep polling while idle, then pick the run up once it starts."""
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    make_config_file(config_dir, output_dir)
+    # idle for three polls, then the run appears, then it finishes
+    running_polls = iter([[], [], [], ["test-src"], [], [], []])
+    monkeypatch.setattr(
+        monitor, "running_sources", lambda config, state: next(running_polls, [])
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+    assert main(["watch", "--wait", "--interval", "0"]) == 0
+    output = capsys.readouterr().out
+    assert "waiting for a run to start" in output
+    assert "nothing running" not in output
+
+
+def test_watch_wait_stops_cleanly_on_interrupt(monkeypatch, tmp_path: Path, capsys) -> None:
+    """Ctrl-C while waiting should exit 0, not raise."""
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    make_config_file(config_dir, output_dir)
+    monkeypatch.setattr(monitor, "running_sources", lambda config, state: [])
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+    def boom(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("kura.commands.time.sleep", boom)
+
+    assert main(["watch", "--wait"]) == 0
+    assert "waiting for a run to start" in capsys.readouterr().out
+
+
+def test_watch_without_wait_still_exits_immediately(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    """Default behaviour is unchanged: no --wait means exit when idle."""
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    make_config_file(config_dir, output_dir)
+    monkeypatch.setattr(monitor, "running_sources", lambda config, state: [])
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+    assert main(["watch"]) == 0
+    out = capsys.readouterr().out
+    assert "nothing running" in out
+    assert "waiting for a run to start" not in out
+
+
 def test_watch_interactive_exits_after_three_empty_polls(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:

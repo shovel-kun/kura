@@ -685,8 +685,24 @@ def watch_command(args) -> int:
         console.print(monitor.render_watch(snapshots))
         return 0
 
+    if not running and getattr(args, "wait", False):
+        # A run that has nothing new finishes in about a second, so the window
+        # where anything is live is easy to miss. Sit and wait for one instead.
+        print(ui.dim("waiting for a run to start · ctrl-c to stop"))
+        try:
+            while not running:
+                time.sleep(args.interval)
+                running = set(monitor.running_sources(config, state_dir)) & selected_names
+        except KeyboardInterrupt:
+            return 0
+
     if not running:
-        print(ui.dim("nothing running · start a run with `kura run --all`"))
+        print(
+            ui.dim(
+                "nothing running · start a run with `kura run --all`,"
+                " or use `kura watch --wait` to wait for one"
+            )
+        )
         return 0
 
     snapshots = _watch_snapshots(sources, running, state_dir, archive_baselines)
