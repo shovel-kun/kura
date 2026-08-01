@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -47,7 +47,7 @@ def test_status_shows_running_indicator(
     output_dir.mkdir()
     make_config_file(config_dir, output_dir)
     assert main(["init"]) == 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     with sqlite3.connect(state_dir / "state.db") as db:
         db.execute(
             "INSERT INTO source_state (source, last_check_at, imported_at) VALUES (?, ?, ?)",

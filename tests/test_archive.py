@@ -2,21 +2,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
-from types import ModuleType
-from unittest.mock import patch
 
 import pytest
 
 from kura.archive import (
-    MEDIA_EXTENSIONS,
     append_archive_entries,
     archive_key,
     read_archive,
 )
 from kura.cli import main
-
 
 # ---------------------------------------------------------------------------
 # Helpers shared by multiple tests

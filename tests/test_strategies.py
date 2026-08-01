@@ -5,7 +5,7 @@ import os
 import sqlite3
 import stat
 import textwrap
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,8 +14,7 @@ from kura.archive import read_archive
 from kura.cli import main
 from kura.config import ConfigError, Source, config_from_data, parse_duration
 from kura.failures import classify_line
-from kura.runner import build_command, _channel_tab_urls, _QUICK_FLAGS
-
+from kura.runner import _QUICK_FLAGS, _channel_tab_urls, build_command
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -546,9 +545,9 @@ class TestFailureRows:
         perm_output = "ERROR: [youtube] vid111aaaaa: Video unavailable"
         _config_dir, state_dir = self._setup(monkeypatch, tmp_path, extra_output=perm_output)
 
+        from kura import paths
         from kura.config import load_config
         from kura.runner import run_source
-        from kura import paths
 
         config = load_config()
         source = config.sources[0]
@@ -586,9 +585,9 @@ class TestFailureRows:
         )
         _config_dir, state_dir = self._setup(monkeypatch, tmp_path, extra_output=mixed_output)
 
+        from kura import paths
         from kura.config import load_config
         from kura.runner import run_source
-        from kura import paths
 
         config = load_config()
         source = config.sources[0]
@@ -682,7 +681,7 @@ class TestFullReindexPromotion:
         db_path = state_dir / "state.db"
 
         # Set last_full_run_at to 1 hour ago (well within 7d interval).
-        recent_ts = datetime.now(tz=timezone.utc).isoformat()
+        recent_ts = datetime.now(tz=UTC).isoformat()
         set_last_full_run_at(db_path, "test-src", recent_ts)
 
         result = main(["run", "test-src"])
@@ -704,7 +703,7 @@ class TestFullReindexPromotion:
         db_path = state_dir / "state.db"
 
         # Set last_full_run_at to 8 days ago.
-        old_ts = datetime(2020, 1, 1, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+        old_ts = datetime(2020, 1, 1, 0, 0, 0, tzinfo=UTC).isoformat()
         set_last_full_run_at(db_path, "test-src", old_ts)
 
         result = main(["run", "test-src"])
@@ -724,7 +723,7 @@ class TestFullReindexPromotion:
         db_path = state_dir / "state.db"
 
         # Set a recent last_full_run_at so no promotion happens.
-        recent_ts = datetime.now(tz=timezone.utc).isoformat()
+        recent_ts = datetime.now(tz=UTC).isoformat()
         set_last_full_run_at(db_path, "test-src", recent_ts)
 
         main(["run", "test-src"])
@@ -813,7 +812,7 @@ class TestRssStrategy:
         )
         # Promote to full reindex won't happen because we set last_full_run_at.
         db_path = state_dir / "state.db"
-        set_last_full_run_at(db_path, "test-src", datetime.now(tz=timezone.utc).isoformat())
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
 
         self._mock_rss(monkeypatch, ["vidAAA", "vidBBB"])
 
@@ -835,7 +834,7 @@ class TestRssStrategy:
             archive_entries=["youtube vidAAA"],
         )
         db_path = state_dir / "state.db"
-        set_last_full_run_at(db_path, "test-src", datetime.now(tz=timezone.utc).isoformat())
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
 
         self._mock_rss(monkeypatch, ["vidAAA"])
 
@@ -860,7 +859,7 @@ class TestRssStrategy:
             archive_entries=["youtube vidAAA"],
         )
         db_path = state_dir / "state.db"
-        set_last_full_run_at(db_path, "test-src", datetime.now(tz=timezone.utc).isoformat())
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
 
         self._mock_rss(monkeypatch, ["vidAAA"])
         main(["run", "test-src"])
@@ -882,7 +881,7 @@ class TestRssStrategy:
             archive_entries=["youtube vidAAA"],
         )
         db_path = state_dir / "state.db"
-        set_last_full_run_at(db_path, "test-src", datetime.now(tz=timezone.utc).isoformat())
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
 
         self._mock_rss(monkeypatch, ["vidAAA", "vidNEW"])  # vidNEW is unknown
 
@@ -902,7 +901,7 @@ class TestRssStrategy:
             tmp_path,
         )
         db_path = state_dir / "state.db"
-        set_last_full_run_at(db_path, "test-src", datetime.now(tz=timezone.utc).isoformat())
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
 
         import kura.runner as runner_mod
 
@@ -930,7 +929,7 @@ class TestRssStrategy:
             archive_entries=["youtube vidAAA"],
         )
         db_path = state_dir / "state.db"
-        set_last_full_run_at(db_path, "test-src", datetime.now(tz=timezone.utc).isoformat())
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
 
         self._mock_rss(monkeypatch, ["vidAAA"])
 
@@ -952,7 +951,7 @@ class TestRssStrategy:
         argv_file.write_text("")
 
         # Set last_full_run_at again (after first run may have updated it).
-        set_last_full_run_at(db_path, "test-src", datetime.now(tz=timezone.utc).isoformat())
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
 
         # Second run.
         main(["run", "test-src"])
@@ -1081,8 +1080,8 @@ class TestSuppress:
 
     def test_suppress_fails_if_lock_held(self, monkeypatch, tmp_path, capsys) -> None:
         """suppress exits 1 if source lock is already held."""
-        from kura.locks import source_lock
         from kura import paths
+        from kura.locks import source_lock
 
         _config_dir, state_dir, _output_dir = self._setup(monkeypatch, tmp_path)
 
@@ -1211,7 +1210,7 @@ class TestStatusDetail:
         """The detail view renders every populated section with the new glyph vocabulary."""
         _config_dir, state_dir, output_dir = self._setup(monkeypatch, tmp_path)
         (output_dir / "archive.txt").write_text("youtube one\nyoutube two\n")
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with sqlite3.connect(state_dir / "state.db") as conn:
             conn.execute(
                 "INSERT INTO source_state (source, last_check_at, imported_at) VALUES (?, ?, ?)",

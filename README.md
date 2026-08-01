@@ -105,6 +105,22 @@ Sources keys:
 | `p` | Pause or resume the selected source |
 | `tab` / `q` | Return to Library / quit |
 
+## Deleting videos (`kura prune`)
+
+`archive.txt` is yt-dlp's "already seen" set, not a blocklist. An ID **in** the file means "skip this"; **removing** an ID means "never seen it, download it again". So when you delete video files to reclaim space, their IDs must stay behind as orphan entries — that is the only thing preventing a re-download.
+
+`kura prune` does both halves correctly and is the supported way to delete archived videos:
+
+```bash
+kura prune SOURCE shorts --dry-run     # see what matches, delete nothing
+kura prune SOURCE shorts               # delete files, keep IDs archived
+kura prune SOURCE --id VIDEO_ID -y     # target one video, no prompt
+```
+
+It takes the same free-text terms and `--since`/`--until`/`--uploaded` filters as `kura search`, so you can preview a selection with `search` and then prune it. The archive is written **before** any file is unlinked, so an interrupted prune can only ever over-suppress — never leave a video deleted *and* re-downloadable. It refuses to run with no filter, holds the source lock so it cannot race a run, and records each pruned video in the `suppressions` table.
+
+Never rewrite `archive.txt` to "only the files that still exist". That re-queues every deleted video on the next run.
+
 ## Update Strategies
 
 Each source has an `update_strategy` that controls how `kura run` invokes yt-dlp:
@@ -116,6 +132,8 @@ Each source has an `update_strategy` that controls how `kura run` invokes yt-dlp
 | `rss` | YouTube channel URL only | Fetches the channel RSS feed; if all items are already archived, records a no-op run without invoking yt-dlp. Otherwise falls through to `quick`. On feed errors, logs a warning and falls through to `quick`. |
 
 Set the strategy in `config.yaml` or with `kura add --strategy STRATEGY`.
+
+Many channels have never posted a Short or gone live, so one or two of the three `quick` tab URLs will not exist.  yt-dlp logs `This channel does not have a shorts tab`, archives the remaining tabs normally, and then exits 1 anyway.  kura recognises this case and records the run as a success, printing `no shorts tab on this channel; skipped`.  If *any* other error appears in the same run, the nonzero exit code stands.
 
 ### Concurrency
 

@@ -14,6 +14,7 @@ from .commands import (
     list_command,
     logs_command,
     pause_command,
+    prune_command,
     resume_command,
     run_command,
     status_command,
@@ -149,6 +150,52 @@ def build_parser() -> argparse.ArgumentParser:
         "--extractor", default="youtube", help="extractor name (default: youtube)"
     )
     unsuppress_parser.set_defaults(func=unsuppress_command)
+
+    prune_parser = subcommands.add_parser(
+        "prune",
+        help="delete a source's video files while keeping their IDs archived",
+        description=(
+            "Delete video files from a source, guaranteeing their IDs stay in archive.txt "
+            "so they are never re-downloaded. Use this instead of editing archive.txt by "
+            "hand: removing an ID from the archive is what causes a re-download."
+        ),
+    )
+    prune_parser.add_argument("name", help="source name as defined in config.yaml")
+    prune_parser.add_argument(
+        "query",
+        nargs="*",
+        help="free-text terms; AND-matched against title and uploader (case-insensitive)",
+    )
+    prune_parser.add_argument(
+        "--id",
+        action="append",
+        dest="ids",
+        metavar="VIDEO_ID",
+        default=None,
+        help="prune a specific video ID (repeatable)",
+    )
+    prune_parser.add_argument(
+        "--since", metavar="X", default=None,
+        help="only videos downloaded on/after X (YYYY-MM-DD or a duration like 7d/12h)",
+    )
+    prune_parser.add_argument(
+        "--until", metavar="X", default=None,
+        help="only videos downloaded on/before X (YYYY-MM-DD or a duration like 7d/12h)",
+    )
+    prune_parser.add_argument(
+        "--uploaded", action="store_true",
+        help="match --since/--until against the upload date instead of the download time",
+    )
+    prune_parser.add_argument(
+        "--reason", default=None, help="optional reason recorded with the suppression"
+    )
+    prune_parser.add_argument(
+        "--dry-run", action="store_true", help="list what would be deleted and stop"
+    )
+    prune_parser.add_argument(
+        "-y", "--yes", action="store_true", help="skip the confirmation prompt"
+    )
+    prune_parser.set_defaults(func=prune_command)
 
     logs_parser = subcommands.add_parser(
         "logs",
@@ -292,6 +339,7 @@ _COMMAND_GROUPS = [
         ("logs", "view a source's run log"),
     ]),
     ("Maintenance", [
+        ("prune", "delete video files, keeping their IDs archived"),
         ("suppress", "mark a video as archived (skip future downloads)"),
         ("unsuppress", "undo a suppression"),
         ("doctor", "check environment health"),

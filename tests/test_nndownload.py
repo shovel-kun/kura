@@ -5,7 +5,6 @@ import os
 import sqlite3
 import stat
 import textwrap
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
@@ -22,7 +21,6 @@ from kura.failures import (
     parse_result_line,
 )
 from kura.runner import build_nndownload_command, run_source
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -47,10 +45,10 @@ def write_nnconf_profile(config_dir: Path, name: str = "niconico-archive", extra
     profiles = config_dir / "profiles"
     profiles.mkdir(parents=True, exist_ok=True)
     (profiles / f"{name}.nnconf").write_text(
-        f"--dump-metadata\n"
-        f"--download-thumbnail\n"
-        f"--download-comments\n"
-        f'--output-path "{{title}} [{{id}}]/{{title}} [{{id}}].{{ext}}"\n'
+        "--dump-metadata\n"
+        "--download-thumbnail\n"
+        "--download-comments\n"
+        '--output-path "{title} [{id}]/{title} [{id}].{ext}"\n'
         + extra
     )
 

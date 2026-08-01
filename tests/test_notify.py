@@ -6,6 +6,7 @@ import os
 import shutil
 import stat
 import textwrap
+from datetime import UTC
 from pathlib import Path
 
 from kura.cli import main
@@ -354,8 +355,9 @@ sources:
     archive_path = output_dir / "archive.txt"
     archive_path.write_text("youtube vidAAA\n")
 
+    from datetime import datetime
+
     from kura.state import connect
-    from datetime import datetime, timezone
     db_path = state_dir / "state.db"
     with connect(db_path) as conn:
         conn.execute(
@@ -364,7 +366,7 @@ sources:
             VALUES (?, ?)
             ON CONFLICT(source) DO UPDATE SET last_full_run_at = excluded.last_full_run_at
             """,
-            ("test-src", datetime.now(tz=timezone.utc).isoformat()),
+            ("test-src", datetime.now(tz=UTC).isoformat()),
         )
 
     def fake_resolve_channel_id(source, db):

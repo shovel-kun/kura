@@ -5,11 +5,11 @@ import sys
 import time
 
 import pytest
+from test_library import make_config, set_kura_dirs, write_nn_video, write_yt_video
 
 from kura import library, ui
 from kura.cli import main
 from kura.config import load_config
-from test_library import make_config, set_kura_dirs, write_nn_video, write_yt_video
 
 
 @pytest.fixture(autouse=True)

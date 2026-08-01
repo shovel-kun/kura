@@ -1,9 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from kura import ui
 
-
-NOW = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
 
 
 def test_rel_time_past_buckets() -> None:

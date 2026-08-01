@@ -5,7 +5,6 @@ from pathlib import Path
 
 from . import paths
 
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY,

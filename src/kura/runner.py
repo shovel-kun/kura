@@ -4,12 +4,17 @@ import shlex
 import subprocess
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import archive, notify, paths, state, ui
 from .config import Source, load_nnconf, parse_duration
-from .failures import classify_line, classify_nndownload_failure, parse_result_line
+from .failures import (
+    classify_line,
+    classify_nndownload_failure,
+    missing_tabs,
+    parse_result_line,
+)
 from .locks import source_lock
 
 
@@ -153,7 +158,6 @@ def _resolve_channel_id(
 
     Returns *None* on failure (caller should fall through to quick).
     """
-    import sqlite3
 
     # Check cache first.
     row = db.execute(  # type: ignore[union-attr]
@@ -182,7 +186,7 @@ def _resolve_channel_id(
         return None
 
     # Cache it.
-    resolved_at = datetime.now(tz=timezone.utc).isoformat()
+    resolved_at = datetime.now(tz=UTC).isoformat()
     db.execute(  # type: ignore[union-attr]
         """
         INSERT INTO channel_cache (source, channel_id, resolved_at)
@@ -209,9 +213,9 @@ def _is_promotion_due(last_full_run_at: str | None, interval_secs: int) -> bool:
         last = datetime.fromisoformat(last_full_run_at)
     except ValueError:
         return True
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
+        last = last.replace(tzinfo=UTC)
     return (now - last).total_seconds() >= interval_secs
 
 
@@ -332,7 +336,7 @@ def _run_source_locked(
         downloader_version = version_result.stdout.strip()
 
     # 7. Build log path.
-    started_at = datetime.now(tz=timezone.utc)
+    started_at = datetime.now(tz=UTC)
     timestamp_compact = started_at.strftime("%Y%m%dT%H%M%SZ")
     log_path = log_source_dir / f"{timestamp_compact}.log"
 
@@ -383,6 +387,19 @@ def _run_source_locked(
 
     exit_code = proc.returncode
 
+    # 10b. Forgive the exit code when absent channel tabs were the only error.
+    # The quick strategy asks for /videos, /shorts and /streams unconditionally;
+    # a channel that has never posted a Short still archives fine, but yt-dlp
+    # exits 1.  Without this the source looks permanently broken and fires a
+    # critical notification on every run.
+    if source.downloader != "nndownload" and exit_code == 1:
+        absent = missing_tabs(output_lines)
+        if absent is not None:
+            exit_code = 0
+            if not quiet:
+                tab_list = ", ".join(absent)
+                print(ui.dim(f"no {tab_list} tab on this channel; skipped"))
+
     # 11. Diff archive to find newly downloaded items.
     new_keys = archive.read_archive(source.archive_file) - old_keys
     new_count = len(new_keys)
@@ -398,7 +415,7 @@ def _run_source_locked(
         _notify_run_outcome(source.name, exit_code, new_count, failure_summary)
 
     # 13. Insert runs row.
-    ended_at = datetime.now(tz=timezone.utc)
+    ended_at = datetime.now(tz=UTC)
     with db:
         db.execute(
             """
@@ -564,8 +581,8 @@ def _try_rss_check(
         return None
 
     # All known — record a runs row and update last_check_at.
-    started_at = datetime.now(tz=timezone.utc)
-    ended_at = datetime.now(tz=timezone.utc)
+    started_at = datetime.now(tz=UTC)
+    ended_at = datetime.now(tz=UTC)
 
     with db:
         db.execute(
@@ -657,7 +674,7 @@ def _collect_failures(
 ) -> str | None:
     """Classify yt-dlp output lines, upsert video_failures rows, return failure_summary."""
     counts: dict[str, int] = {"permanent": 0, "transient": 0}
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=UTC).isoformat()
 
     for line in output_lines:
         cls = classify_line(line)
@@ -704,7 +721,7 @@ def _collect_nndownload_failures(
 ) -> str | None:
     """Parse nndownload [result] lines, upsert video_failures rows, return failure_summary."""
     counts: dict[str, int] = {}
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=UTC).isoformat()
 
     for line in output_lines:
         parsed = parse_result_line(line)

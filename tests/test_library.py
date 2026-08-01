@@ -15,7 +15,6 @@ from kura import library, ui
 from kura.cli import main
 from kura.config import load_config
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers (patterns mirror test_n2_nndownload_import.py)
 # ---------------------------------------------------------------------------

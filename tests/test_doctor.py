@@ -2,18 +2,15 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sqlite3
 import stat
 import textwrap
-import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
 from kura.cli import main
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers (mirrors earlier test modules)
@@ -467,7 +464,7 @@ sources: []
         assert "✗" in out
         assert "config" in out.lower()
 
-    def test_cookies_file_missing_exits_1_fail(  # noqa: C901
+    def test_cookies_file_missing_exits_1_fail(
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
@@ -545,8 +542,8 @@ sources:
 
     def test_held_lock_reports_running(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """When a source lock is held, doctor reports 'appears to be running'."""
-        from kura.locks import source_lock
         from kura import paths
+        from kura.locks import source_lock
 
         self._setup_healthy(monkeypatch, tmp_path)
         capsys.readouterr()  # flush init output
@@ -633,7 +630,7 @@ class TestConcurrencyConfig:
 
     @pytest.mark.parametrize("bad_value", [0, 9, "x", -1, None])
     def test_concurrency_invalid_raises(self, bad_value, tmp_path: Path) -> None:
-        from kura.config import config_from_data, ConfigError
+        from kura.config import ConfigError, config_from_data
         config_dir = self._config_dir(tmp_path)
         with pytest.raises(ConfigError, match="concurrency"):
             config_from_data(
@@ -857,7 +854,7 @@ class TestLocalTimeDisplay:
         # "1 hour ago" is flaky since a 6h cron boundary can fall within that hour).
         import kura.state as st
         db_path = state_dir / "state.db"
-        recent = datetime.now(tz=timezone.utc).isoformat()
+        recent = datetime.now(tz=UTC).isoformat()
         with st.connect(db_path) as conn:
             conn.execute(
                 """

@@ -5,15 +5,12 @@ import os
 import sqlite3
 import stat
 import textwrap
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
-import pytest
 
 from kura.cli import main
 from kura.commands import compute_next_due, is_source_due
 from kura.locks import source_lock
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers (mirror test_runner.py patterns)
@@ -115,7 +112,7 @@ def write_fake_ytdlp(bin_dir: Path, exit_code: int = 0, archive_lines: list[str]
 
 def set_last_check_at(db_path: Path, name: str, ts: str) -> None:
     """Upsert last_check_at in source_state for testing."""
-    import kura.state as state
+    from kura import state
     with state.connect(db_path) as conn:
         conn.execute(
             """
@@ -139,38 +136,38 @@ class TestComputeNextDue:
 
     def test_null_last_check_is_always_due(self):
         """If last_check_at is None the source is immediately due."""
-        now = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         assert is_source_due(self.SCHEDULE, None, now=now) is True
 
     def test_just_run_is_not_due(self):
         """A source that ran seconds ago with a 6-hour schedule is not due."""
-        now = datetime(2024, 6, 1, 12, 0, 5, tzinfo=timezone.utc)
-        last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+        now = datetime(2024, 6, 1, 12, 0, 5, tzinfo=UTC)
+        last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC).isoformat()
         assert is_source_due(self.SCHEDULE, last, now=now) is False
 
     def test_seven_hours_ago_is_due(self):
         """A source whose last run was 7 hours ago is due (schedule is 6h)."""
-        now = datetime(2024, 6, 1, 19, 0, 0, tzinfo=timezone.utc)
-        last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+        now = datetime(2024, 6, 1, 19, 0, 0, tzinfo=UTC)
+        last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC).isoformat()
         assert is_source_due(self.SCHEDULE, last, now=now) is True
 
     def test_exactly_at_next_due_is_due(self):
         """A source whose next run time is exactly now is due."""
-        last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+        last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC).isoformat()
         next_dt = compute_next_due(self.SCHEDULE, last)
         # next_dt is 18:00 UTC; if now == next_dt it's due
         assert is_source_due(self.SCHEDULE, last, now=next_dt) is True
 
     def test_compute_next_due_returns_correct_datetime(self):
         """compute_next_due returns the correct next scheduled time."""
-        last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc).isoformat()
+        last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC).isoformat()
         next_dt = compute_next_due(self.SCHEDULE, last)
         assert next_dt.hour == 18
         assert next_dt.date() == datetime(2024, 6, 1).date()
 
     def test_null_last_check_returns_past_sentinel(self):
         """compute_next_due with None returns a past sentinel (year 1970)."""
-        now = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
         next_dt = compute_next_due(self.SCHEDULE, None, now=now)
         assert next_dt < now
 
@@ -206,7 +203,7 @@ class TestRunDue:
         # until the next boundary; a fixed "1 hour ago" is flaky because a 6h cron
         # boundary can fall within that hour, making the source due.)
         # src-a has no last_check_at → due immediately.
-        recent = datetime.now(tz=timezone.utc).isoformat()
+        recent = datetime.now(tz=UTC).isoformat()
         set_last_check_at(db_path, "src-b", recent)
 
         result = main(["run", "--due"])
@@ -231,7 +228,7 @@ class TestRunDue:
         config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
-        recent = datetime.now(tz=timezone.utc).isoformat()
+        recent = datetime.now(tz=UTC).isoformat()
         set_last_check_at(db_path, "src-b", recent)
 
         main(["run", "--due"])
@@ -256,7 +253,7 @@ class TestRunDue:
         db_path = state_dir / "state.db"
 
         # Make src-b appear to have just run (not due)
-        real_now = datetime.now(tz=timezone.utc)
+        real_now = datetime.now(tz=UTC)
         one_hour_ago = real_now.replace(hour=(real_now.hour - 1) % 24).isoformat()
         set_last_check_at(db_path, "src-b", one_hour_ago)
 

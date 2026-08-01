@@ -14,13 +14,12 @@ import shlex
 import shutil
 import subprocess
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from . import paths, state, ui
 from .archive import MEDIA_EXTENSIONS, archive_key, nndownload_sidecar_info
 from .config import ConfigError, load_config, parse_duration
-
 
 VIDEO_COLUMNS = (
     "source",
@@ -84,7 +83,7 @@ def refresh_index(source, *, full: bool = False, db_path: Path | None = None) ->
                 except ValueError:
                     cutoff = None
 
-            scan_started = datetime.now(tz=timezone.utc).isoformat()
+            scan_started = datetime.now(tz=UTC).isoformat()
 
             output_dir = source.output_dir
             if output_dir.is_dir():
@@ -125,7 +124,7 @@ def _extract_row(source_name: str, sidecar: Path, mtime: float) -> tuple | None:
         return None
     key, video_id, title, uploader, upload_date, duration_s = parsed
     size_bytes = _sibling_media_size(sidecar.parent, stem)
-    downloaded_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+    downloaded_at = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
     return (
         source_name,
         key,
@@ -243,7 +242,7 @@ def _date_col(downloaded_at: str | None, now: datetime | None = None) -> str:
     if not downloaded_at:
         return ""
     local = ui.local_dt(downloaded_at)
-    local_now = (now or datetime.now(tz=timezone.utc)).astimezone()
+    local_now = (now or datetime.now(tz=UTC)).astimezone()
     if local.year == local_now.year:
         return local.strftime("%b %d")
     return local.strftime("%b %d %Y")
@@ -296,9 +295,9 @@ def _parse_bound(value: str, *, end: bool = False) -> tuple[datetime, date]:
         local = datetime(d.year, d.month, d.day).astimezone()
         if end:
             local = local + timedelta(days=1) - timedelta(microseconds=1)
-        return local.astimezone(timezone.utc), d
+        return local.astimezone(UTC), d
     seconds = parse_duration(text)  # raises ConfigError on bad input
-    bound = datetime.now(tz=timezone.utc) - timedelta(seconds=seconds)
+    bound = datetime.now(tz=UTC) - timedelta(seconds=seconds)
     return bound, bound.astimezone().date()
 
 

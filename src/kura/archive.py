@@ -4,7 +4,7 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Media file extensions whose absence of a sibling .info.json marks them as unverifiable.
@@ -19,7 +19,7 @@ _ydl_instance = None
 def _get_ydl():
     global _ydl_instance
     if _ydl_instance is None:
-        import yt_dlp  # noqa: PLC0415
+        import yt_dlp
 
         _ydl_instance = yt_dlp.YoutubeDL({"quiet": True})
     return _ydl_instance
@@ -133,7 +133,7 @@ def remove_archive_entry(path: Path, entry: str) -> None:
     if len(new_lines) == len(lines):
         raise ValueError(f"entry not found in archive: {entry!r}")
 
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%S")
     backup_path = path.parent / f"{path.name}.bak.{timestamp}"
     backup_path.write_text(existing_content, encoding="utf-8")
 
@@ -161,7 +161,7 @@ def append_archive_entries(path: Path, entries: list[str]) -> None:
     if not entries:
         return
 
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%S")
 
     existing_content: str = ""
     if path.exists():

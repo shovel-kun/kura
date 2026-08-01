@@ -44,6 +44,44 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+# Any yt-dlp ERROR line, used to decide whether an exit code can be forgiven.
+_ANY_ERROR = re.compile(r"^\s*ERROR:", re.IGNORECASE)
+
+# "ERROR: [youtube:tab] @handle: This channel does not have a streams tab"
+# yt-dlp continues past this and still processes the remaining tab URLs, but
+# the process still exits 1.  See :func:`missing_tabs`.
+_MISSING_TAB = re.compile(
+    r"ERROR:.*this channel does not have an?\s+(\w+)\s+tab",
+    re.IGNORECASE,
+)
+
+
+def missing_tabs(output_lines: list[str]) -> list[str] | None:
+    """Return the tab names that were missing, when *that was the only problem*.
+
+    The *quick* strategy always passes ``/videos``, ``/shorts`` and ``/streams``
+    to yt-dlp, but plenty of channels have never posted a Short or gone live.
+    yt-dlp logs an error for each absent tab and exits 1, even though it
+    archived the tabs that do exist perfectly well.  Taking that exit code at
+    face value marks a healthy source as permanently failing.
+
+    Returns the missing tab names (in the order they were reported) when every
+    ``ERROR:`` line in *output_lines* was a missing-tab error, so the caller may
+    treat the run as successful.  Returns *None* when there were no missing-tab
+    errors, or when some *other* error also occurred — a real failure must keep
+    its nonzero exit code even if a tab happened to be missing too.
+    """
+    tabs: list[str] = []
+    for line in output_lines:
+        if not _ANY_ERROR.match(line):
+            continue
+        m = _MISSING_TAB.search(line)
+        if m is None:
+            return None  # an unrelated error — the exit code is genuine
+        tabs.append(m.group(1).lower())
+    return tabs or None
+
+
 def classify_line(line: str) -> Classification:
     """Classify a single yt-dlp output line.
 

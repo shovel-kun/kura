@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
-
+from datetime import UTC, datetime, timedelta
 
 OK = "✓"
 FAIL = "✗"
@@ -77,7 +76,7 @@ def pad(value: str, width: int) -> str:
 def local_dt(value: str | datetime) -> datetime:
     dt = datetime.fromisoformat(value) if isinstance(value, str) else value
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.astimezone()
 
 
@@ -86,7 +85,7 @@ def local_ts(value: str | datetime, fmt: str = "%b %d %H:%M") -> str:
 
 
 def rel_time(dt: datetime, now: datetime | None = None) -> str:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     local_value = dt.astimezone()
     local_now = now.astimezone()
 

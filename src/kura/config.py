@@ -15,7 +15,6 @@ from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from . import paths
 
-
 DEFAULT_PROFILE = "av1-archive"
 DEFAULT_SCHEDULE = "0 */6 * * *"
 DEFAULT_UPDATE_STRATEGY = "quick"
@@ -410,8 +409,7 @@ def _validate_niconico_url(name: str, url: str) -> None:
     """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
+    host = host.removeprefix("www.")
     path = parsed.path.rstrip("/")
 
     # Reject known non-video services.
@@ -474,8 +472,7 @@ def load_nnconf(profile_path: Path) -> list[str]:
 def is_youtube_channel_url(url: str) -> bool:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
+    host = host.removeprefix("www.")
     if host not in {"youtube.com", "m.youtube.com"}:
         return False
     path = parsed.path.rstrip("/")

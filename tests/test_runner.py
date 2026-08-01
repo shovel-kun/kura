@@ -4,15 +4,13 @@ import os
 import sqlite3
 import stat
 import textwrap
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-
-import pytest
 
 from kura.cli import main
 from kura.config import Source
+from kura.failures import missing_tabs
 from kura.runner import _print_run_summary, build_command, run_source
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -20,7 +18,7 @@ from kura.runner import _print_run_summary, build_command, run_source
 
 
 def test_run_summary_formats_duration_and_home_path(capsys) -> None:
-    started = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
+    started = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
     _print_run_summary(
         "test-channel",
         0,
@@ -36,7 +34,7 @@ def test_run_summary_formats_duration_and_home_path(capsys) -> None:
 
 
 def test_failed_run_summary_omits_duration(capsys) -> None:
-    started = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
+    started = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
     _print_run_summary(
         "test-channel",
         3,
@@ -102,15 +100,22 @@ def make_source(
     )
 
 
-def write_fake_ytdlp(bin_dir: Path, exit_code: int = 0, archive_lines: list[str] | None = None) -> None:
+def write_fake_ytdlp(
+    bin_dir: Path,
+    exit_code: int = 0,
+    archive_lines: list[str] | None = None,
+    error_lines: list[str] | None = None,
+) -> None:
     """Write a fake yt-dlp executable to *bin_dir*.
 
     The fake script:
     - Responds to ``--version`` with "2099.01.01".
     - When ``--simulate`` is present: prints 3 pre_process lines to stdout and exits.
-    - Otherwise: appends *archive_lines* to the ``--download-archive`` file.
+    - Otherwise: appends *archive_lines* to the ``--download-archive`` file and
+      prints *error_lines* verbatim before exiting.
     """
     archive_lines = archive_lines or []
+    errors_repr = repr(error_lines or [])
     # Serialise archive lines as a Python list literal safe to embed in source.
     lines_repr = repr(archive_lines)
 
@@ -143,6 +148,8 @@ def write_fake_ytdlp(bin_dir: Path, exit_code: int = 0, archive_lines: list[str]
 
         print("Downloading video abc123")
         print("Downloading video def456")
+        for line in {errors_repr}:
+            print(line)
         sys.exit({exit_code})
     """)
 
@@ -380,3 +387,105 @@ def test_status_table(monkeypatch, tmp_path: Path, capsys) -> None:
     source_line = lines[0]
     # The line should contain a date or "now".
     assert "next in" in source_line or "next now" in source_line
+
+
+# ---------------------------------------------------------------------------
+# Missing channel tabs — yt-dlp exits 1 but the run is healthy
+# ---------------------------------------------------------------------------
+
+_NO_SHORTS = "ERROR: [youtube:tab] @somechannel: This channel does not have a shorts tab"
+_NO_STREAMS = "ERROR: [youtube:tab] @somechannel: This channel does not have a streams tab"
+
+
+def test_missing_tabs_detects_each_absent_tab() -> None:
+    """Both absent tabs are reported, in the order yt-dlp printed them."""
+    lines = ["[youtube:tab] Downloading page 1\n", _NO_SHORTS + "\n", _NO_STREAMS + "\n"]
+    assert missing_tabs(lines) == ["shorts", "streams"]
+
+
+def test_missing_tabs_none_when_no_tab_errors() -> None:
+    """A clean run has nothing to forgive."""
+    assert missing_tabs(["Downloading video abc123\n"]) is None
+
+
+def test_missing_tabs_none_when_another_error_present() -> None:
+    """A real error alongside a missing tab must keep the run's failure."""
+    lines = [
+        _NO_STREAMS + "\n",
+        "ERROR: [youtube] abc123: Video unavailable\n",
+    ]
+    assert missing_tabs(lines) is None
+
+
+def test_missing_tabs_ignores_non_error_mentions() -> None:
+    """Only ERROR: lines are considered, so a title cannot spoof the check."""
+    lines = ["[download] This channel does not have a streams tab.mp4\n"]
+    assert missing_tabs(lines) is None
+
+
+def test_run_source_missing_tabs_recorded_as_success(monkeypatch, tmp_path: Path, capsys) -> None:
+    """yt-dlp exits 1 solely over absent tabs → run counts as a success."""
+    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    make_config(config_dir, output_dir)
+    assert main(["init"]) == 0
+
+    bin_dir = tmp_path / "bin"
+    write_fake_ytdlp(
+        bin_dir,
+        exit_code=1,
+        archive_lines=["youtube abc123"],
+        error_lines=[_NO_SHORTS, _NO_STREAMS],
+    )
+    monkeypatch.setenv("PATH", str(bin_dir) + ":" + os.environ.get("PATH", ""))
+
+    from kura.config import load_config
+    source = load_config().sources[0]
+
+    assert run_source(source, config_dir, state_dir) == 0
+
+    captured = capsys.readouterr()
+    assert "no shorts, streams tab on this channel; skipped" in captured.out
+
+    with sqlite3.connect(state_dir / "state.db") as conn:
+        row = conn.execute(
+            "SELECT exit_code, new_count FROM runs WHERE source = 'test-src'"
+        ).fetchone()
+        assert row == (0, 1)
+
+        ss_row = conn.execute(
+            "SELECT last_success_at FROM source_state WHERE source = 'test-src'"
+        ).fetchone()
+        assert ss_row[0] is not None  # the source is not marked as failing
+
+
+def test_run_source_real_error_keeps_failure(monkeypatch, tmp_path: Path, capsys) -> None:
+    """An unrelated error alongside a missing tab keeps the nonzero exit code."""
+    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    make_config(config_dir, output_dir)
+    assert main(["init"]) == 0
+
+    bin_dir = tmp_path / "bin"
+    write_fake_ytdlp(
+        bin_dir,
+        exit_code=1,
+        archive_lines=[],
+        error_lines=[_NO_STREAMS, "ERROR: [youtube] abc123: Video unavailable"],
+    )
+    monkeypatch.setenv("PATH", str(bin_dir) + ":" + os.environ.get("PATH", ""))
+
+    from kura.config import load_config
+    source = load_config().sources[0]
+
+    assert run_source(source, config_dir, state_dir) == 1
+
+    with sqlite3.connect(state_dir / "state.db") as conn:
+        ss_row = conn.execute(
+            "SELECT last_success_at FROM source_state WHERE source = 'test-src'"
+        ).fetchone()
+        assert ss_row[0] is None

@@ -12,7 +12,6 @@ from rich.text import Text
 from . import locks, paths
 from .config import Config
 
-
 _PROGRESS_RE = re.compile(
     r"\[download\]\s+(?P<pct>\d+(?:\.\d+)?)%\s+of\s+(?:~\s*)?"
     r"(?P<size>\S+)(?:\s+at\s+(?P<speed>\S+)\s+ETA\s+(?P<eta>\S+)|\s+in\s+\S+)?"

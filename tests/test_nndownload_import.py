@@ -5,10 +5,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from kura.cli import main
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers (mirrors patterns from test_archive.py / test_nndownload.py)

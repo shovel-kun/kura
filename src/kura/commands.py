@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import date, datetime, timezone, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from croniter import croniter
@@ -21,9 +21,11 @@ from .archive import (
     MEDIA_EXTENSIONS,
     append_archive_entries,
     archive_key,
-    nndownload_archive_key as _nndownload_archive_key,
     read_archive,
     remove_archive_entry,
+)
+from .archive import (
+    nndownload_archive_key as _nndownload_archive_key,
 )
 from .config import (
     DEFAULT_CONFIG_TEXT,
@@ -38,7 +40,6 @@ from .config import (
 )
 from .locks import source_lock
 from .runner import build_command, run_source
-
 
 SYSTEMD_INSTRUCTIONS = """Systemd user timer example:
 
@@ -303,7 +304,7 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
         append_archive_entries(archive_path, missing)
 
     # Upsert imported_at into source_state.
-    imported_at = datetime.now(tz=timezone.utc).isoformat()
+    imported_at = datetime.now(tz=UTC).isoformat()
     db_path = paths.state_db()
     with state.connect(db_path) as conn:
         conn.execute(
@@ -333,7 +334,7 @@ def compute_next_due(schedule: str, last_check_at: str | None, now: datetime | N
         ``datetime.now(timezone.utc)``.  Pass an explicit value in tests.
     """
     if now is None:
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
     if last_check_at is None:
         # Never run → return a sentinel that is always in the past.
         return now.replace(year=1970)
@@ -344,7 +345,7 @@ def compute_next_due(schedule: str, last_check_at: str | None, now: datetime | N
 def is_source_due(schedule: str, last_check_at: str | None, now: datetime | None = None) -> bool:
     """Return True iff the source's next scheduled run is <= *now*."""
     if now is None:
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
     if last_check_at is None:
         return True
     next_dt = compute_next_due(schedule, last_check_at, now)
@@ -401,7 +402,7 @@ def run_command(args) -> int:
     due_mode: bool = getattr(args, "due", False)
     all_mode: bool = getattr(args, "all", False)
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     any_failure = False
     due_sources: list = []
 
@@ -500,7 +501,6 @@ def verify_command(args) -> int:
 
 def _verify_nndownload(source) -> int:
     """Verify an nndownload source using --list-ids."""
-    import re as _re
     from .archive import read_archive
 
     # Build: nndownload --non-interactive <auth> --list-ids <url>
@@ -1046,7 +1046,7 @@ def suppress_command(args) -> int:
             append_archive_entries(archive_path, [archive_entry])
 
         # Insert/update suppressions row.
-        suppressed_at = datetime.now(tz=timezone.utc).isoformat()
+        suppressed_at = datetime.now(tz=UTC).isoformat()
         with state.connect(db_path) as db:
             db.execute(
                 """
@@ -1441,7 +1441,6 @@ def _check_cookies(cookies: str, prefix: str, ok, warn, fail) -> None:
 def _check_session_cookie(auth: str, prefix: str, ok, warn, fail) -> None:
     """Check --session-cookie file in nndownload auth string."""
     import shlex as _shlex
-    import stat as _stat
     try:
         parts = _shlex.split(auth)
     except ValueError:
@@ -1477,3 +1476,177 @@ def stub_command(command: str, note: str):
 def handle_config_error(error: ConfigError) -> int:
     print(ui.red(f"{ui.FAIL} {error}"))
     return 1
+
+
+# ---------------------------------------------------------------------------
+# kura prune
+# ---------------------------------------------------------------------------
+
+
+def _video_files(directory: Path, video_id: str) -> tuple[list[Path], str | None]:
+    """Return the files on disk belonging to *video_id* inside *directory*.
+
+    Resolution is sidecar-first: locate the ``*.info.json`` (yt-dlp) or ``*.json``
+    (nndownload) whose parsed id matches, then take every sibling sharing its
+    stem.  Falls back to an ``[<video_id>]`` filename match for layouts whose
+    sidecars are missing.  Returns ``(files, stem)``.
+    """
+    from .library import _parse_nndownload_sidecar, _parse_ytdlp_sidecar
+
+    if not directory.is_dir():
+        return [], None
+
+    stem: str | None = None
+    for sidecar in sorted(directory.iterdir()):
+        if not sidecar.is_file():
+            continue
+        if sidecar.name.endswith(".info.json"):
+            parsed = _parse_ytdlp_sidecar(sidecar)
+            candidate = sidecar.name[: -len(".info.json")]
+        elif sidecar.suffix == ".json":
+            parsed = _parse_nndownload_sidecar(sidecar)
+            candidate = sidecar.stem
+        else:
+            continue
+        if parsed and parsed[1] == video_id:
+            stem = candidate
+            break
+
+    if stem is not None:
+        files = [p for p in directory.iterdir() if p.is_file() and p.name.startswith(stem + ".")]
+    else:
+        # No usable sidecar — fall back to the id embedded in the filename.
+        files = [p for p in directory.iterdir() if p.is_file() and f"[{video_id}]" in p.name]
+    return files, stem
+
+
+def prune_command(args) -> int:
+    """Delete a source's video files while guaranteeing their IDs stay archived.
+
+    This is the safe counterpart to hand-editing ``archive.txt``.  The archive is
+    written *before* anything is unlinked, so an interruption can only ever leave
+    videos over-suppressed — never re-downloadable.  Removing an ID from the
+    archive is what causes a re-download; this command never removes one.
+    """
+    from .library import fmt_size, query_videos, refresh_index
+
+    source_name: str = args.name
+    try:
+        config = load_config()
+    except ConfigError as error:
+        print(ui.red(f"{ui.FAIL} {error}"))
+        return 1
+
+    source = next((s for s in config.sources if s.name == source_name), None)
+    if source is None:
+        known = ", ".join(s.name for s in config.sources)
+        print(ui.red(f"{ui.FAIL} unknown source {source_name!r}" + (f"; known: {known}" if known else "")))
+        return 1
+
+    ids: list[str] = list(getattr(args, "ids", None) or [])
+    terms: list[str] = list(getattr(args, "query", None) or [])
+    if not ids and not terms and not args.since and not args.until:
+        print(ui.red(f"{ui.FAIL} refusing to prune everything; pass search terms, --id, --since or --until"))
+        return 1
+
+    db_path = paths.state_db()
+    state.init_db(db_path)
+
+    with source_lock(source_name, paths.state_dir()) as acquired:
+        if not acquired:
+            print(ui.red(f"{ui.FAIL} {source_name} is currently running; cannot prune while the lock is held"))
+            return 1
+
+        refresh_index(source, db_path=db_path)
+        rows = query_videos(
+            db_path,
+            [source_name],
+            terms=terms,
+            since=args.since,
+            until=args.until,
+            uploaded=getattr(args, "uploaded", False),
+        )
+        if ids:
+            wanted = set(ids)
+            rows = [r for r in rows if r["video_id"] in wanted]
+
+        # Only rows that still have files on disk are prunable.
+        targets: list[tuple[dict, list[Path]]] = []
+        for row in rows:
+            directory = Path(row["dir"]) if row.get("dir") else None
+            if directory is None:
+                continue
+            files, _ = _video_files(directory, row["video_id"])
+            if files:
+                targets.append((row, files))
+
+        if not targets:
+            print(ui.dim("nothing to prune"))
+            return 0
+
+        total = sum(f.stat().st_size for _, files in targets for f in files if f.exists())
+        print(f"{len(targets)} video(s), {fmt_size(total)}:")
+        for row, files in targets:
+            print(f"  {ui.dim(row['video_id'])}  {row['title'] or '(untitled)'}")
+
+        if getattr(args, "dry_run", False):
+            print(ui.dim("dry run; nothing deleted"))
+            return 0
+
+        if not getattr(args, "yes", False):
+            try:
+                reply = input("delete these files? their IDs stay archived [y/N] ").strip().lower()
+            except EOFError:
+                reply = ""
+            if reply not in ("y", "yes"):
+                print(ui.dim("aborted"))
+                return 1
+
+        # 1. Archive first — this is the step that must not be skipped or reordered.
+        existing = read_archive(source.archive_file)
+        missing = [row["archive_key"] for row, _ in targets if row["archive_key"] not in existing]
+        if missing:
+            append_archive_entries(source.archive_file, missing)
+        verify = read_archive(source.archive_file)
+        unprotected = [row["archive_key"] for row, _ in targets if row["archive_key"] not in verify]
+        if unprotected:
+            print(ui.red(f"{ui.FAIL} archive write did not take effect for {len(unprotected)} entries; nothing deleted"))
+            return 1
+
+        # 2. Only now touch the filesystem.
+        freed = 0
+        removed = 0
+        suppressed_at = datetime.now(tz=UTC).isoformat()
+        for row, files in targets:
+            for path in files:
+                try:
+                    freed += path.stat().st_size
+                    path.unlink()
+                except OSError as error:
+                    print(ui.yellow(f"! could not delete {path}: {error}"))
+            directory = Path(row["dir"])
+            if directory != source.output_dir and directory.is_dir() and not any(directory.iterdir()):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+            removed += 1
+
+        with state.connect(db_path) as db:
+            for row, _ in targets:
+                db.execute(
+                    """
+                    INSERT INTO suppressions (source, archive_key, suppressed_at, reason)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(source, archive_key) DO UPDATE SET
+                        suppressed_at = excluded.suppressed_at,
+                        reason        = excluded.reason
+                    """,
+                    (source_name, row["archive_key"], suppressed_at, getattr(args, "reason", None) or "pruned"),
+                )
+
+        refresh_index(source, full=True, db_path=db_path)
+
+    print(ui.green(f"{ui.OK} pruned {removed} video(s), freed {fmt_size(freed)}; "
+                   f"{len(missing)} new archive entr{'y' if len(missing) == 1 else 'ies'} added"))
+    return 0
