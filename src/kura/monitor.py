@@ -18,6 +18,16 @@ _PROGRESS_RE = re.compile(
 )
 _DESTINATION_RE = re.compile(r"\[download\]\s+Destination:\s+(.+)$")
 _VIDEO_ID_RE = re.compile(r"(?:\[youtube\]|\[info\])\s+([^:]+):")
+# External-downloader runs (--downloader ffmpeg) log ffmpeg's own status lines
+# instead of yt-dlp's [download] lines, e.g.:
+#   frame=  120 fps=0.0 q=-1.0 size=    1536KiB time=00:00:03.99 bitrate=3146.6kbits/s speed=   8x elapsed=0:00:00.50
+_FFMPEG_PROGRESS_RE = re.compile(
+    r"\bsize=\s*(?P<size>\S+)\s+time=(?P<time>\d+:\d{2}:\d{2}(?:\.\d+)?)\s+"
+    r"bitrate=\s*\S+\s+speed=\s*(?P<speed>\S+)"
+)
+_FFMPEG_DURATION_RE = re.compile(
+    r"^\s*Duration:\s*(?P<duration>\d+:\d{2}:\d{2}(?:\.\d+)?)"
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +88,96 @@ def tail_lines(path: Path, n: int = 40) -> list[str]:
     return [line.decode("utf-8", errors="replace") for line in data.splitlines()[-n:]]
 
 
+def _parse_clock(value: str) -> float | None:
+    """Convert an ffmpeg H:MM:SS(.ff) timestamp into seconds."""
+    parts = value.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    except ValueError:
+        return None
+
+
+def _format_clock(seconds: float) -> str:
+    total = int(seconds)
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02}:{secs:02}"
+    return f"{minutes:02}:{secs:02}"
+
+
+def _current_video_duration(lines: list[str], dest_index: int | None) -> float | None:
+    """Return the Duration ffmpeg logged after the current video's Destination line."""
+    if dest_index is None:
+        return None
+    for line in reversed(lines[dest_index:]):
+        found = _FFMPEG_DURATION_RE.search(line)
+        if found:
+            return _parse_clock(found.group("duration"))
+    return None
+
+
+def _ffmpeg_progress(
+    match: re.Match[str], duration: float | None
+) -> tuple[float | None, str | None, str | None, str | None]:
+    """Derive (pct, speed, eta, size) from an ffmpeg status line.
+
+    ffmpeg reports the stream position, not a percentage, so pair it with the
+    current video's duration. The speed column shows ffmpeg's realtime
+    multiplier (e.g. "9.9x").
+    """
+    size = match.group("size") if match.group("size") != "N/A" else None
+    speed = match.group("speed") if match.group("speed") != "N/A" else None
+    position = _parse_clock(match.group("time"))
+
+    if position is None or not duration:
+        return None, speed, None, size
+
+    pct = min(100.0, round(position / duration * 100, 1))
+    try:
+        multiplier = float((speed or "").rstrip("x"))
+    except ValueError:
+        multiplier = 0.0
+    eta = None
+    if multiplier > 0:
+        eta = _format_clock(max(0.0, duration - position) / multiplier)
+    return pct, speed, eta, size
+
+
+def watch_window(path: Path, max_bytes: int = 4 * 1024 * 1024) -> list[str]:
+    """Read trailing log lines back to the current video's Destination marker.
+
+    A long download scrolls the `[download] Destination:` line (and, for
+    ffmpeg-based downloads, the Duration line) far past any fixed-size tail,
+    so read backwards until the marker is included, capped at *max_bytes*.
+    """
+    marker = b"[download] Destination:"
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            remaining = handle.tell()
+            chunks: list[bytes] = []
+            read = 0
+            boundary = b""
+            while remaining and read < max_bytes:
+                chunk_size = min(65536, remaining)
+                remaining -= chunk_size
+                handle.seek(remaining)
+                chunk = handle.read(chunk_size)
+                chunks.append(chunk)
+                read += chunk_size
+                if marker in chunk + boundary:
+                    break
+                boundary = chunk[: len(marker) - 1]
+    except FileNotFoundError:
+        return []
+
+    data = b"".join(reversed(chunks))
+    return [line.decode("utf-8", errors="replace") for line in data.splitlines()]
+
+
 def parse_progress(lines: list[str]) -> dict[str, Any]:
     """Extract the latest useful yt-dlp progress signals from log lines."""
     pct: float | None = None
@@ -86,10 +186,12 @@ def parse_progress(lines: list[str]) -> dict[str, Any]:
     size: str | None = None
     title: str | None = None
 
-    for line in reversed(lines):
-        destination = _DESTINATION_RE.search(line)
+    dest_index: int | None = None
+    for index in range(len(lines) - 1, -1, -1):
+        destination = _DESTINATION_RE.search(lines[index])
         if destination:
             title = Path(destination.group(1).strip().strip("\"'")).parent.name or None
+            dest_index = index
             break
     if title is None:
         for line in reversed(lines):
@@ -106,17 +208,19 @@ def parse_progress(lines: list[str]) -> dict[str, Any]:
             speed = progress.group("speed")
             eta = progress.group("eta")
             break
+        ffmpeg = _FFMPEG_PROGRESS_RE.search(line)
+        if ffmpeg:
+            duration = _current_video_duration(lines, dest_index)
+            pct, speed, eta, size = _ffmpeg_progress(ffmpeg, duration)
+            break
 
     phase = "working"
     for line in reversed(lines):
         lower = line.lower()
-        if (
-            "[youtube:tab]" in lower
-            and (
-                "downloading api json" in lower
-                or re.search(r"\bpage\s+\d+\b", lower)
-                or "playlist" in lower
-            )
+        if "[youtube:tab]" in lower and (
+            "downloading api json" in lower
+            or re.search(r"\bpage\s+\d+\b", lower)
+            or "playlist" in lower
         ):
             phase = "enumerating"
             break
@@ -141,13 +245,17 @@ def parse_progress(lines: list[str]) -> dict[str, Any]:
         if "[sponsorblock]" in lower:
             phase = "sponsorblock"
             break
-        if "[metadata]" in lower or "writing video metadata" in lower or ("writing " in lower and " to:" in lower):
+        if (
+            "[metadata]" in lower
+            or "writing video metadata" in lower
+            or ("writing " in lower and " to:" in lower)
+        ):
             phase = "metadata"
             break
         if "deleting original file" in lower:
             phase = "processing"
             break
-        if _PROGRESS_RE.search(line):
+        if _PROGRESS_RE.search(line) or _FFMPEG_PROGRESS_RE.search(line):
             phase = "downloading"
             break
         if "has already been recorded" in lower:

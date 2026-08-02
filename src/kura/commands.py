@@ -610,7 +610,7 @@ def _progress_for_source(name: str, state_dir: Path) -> dict:
     log_path = monitor.current_log(name, state_dir)
     if log_path is None:
         return monitor.parse_progress([])
-    return monitor.parse_progress(monitor.tail_lines(log_path))
+    return monitor.parse_progress(monitor.watch_window(log_path))
 
 
 def _running_outcome(name: str, state_dir: Path) -> str:

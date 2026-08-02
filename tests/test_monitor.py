@@ -51,7 +51,9 @@ def make_source(tmp_path: Path, name: str, *, enabled: bool = True) -> Source:
             {"phase": "skipping"},
         ),
         (
-            ["[download] Destination: /archive/すごい動画 [abc123]/すごい動画 [abc123].webm"],
+            [
+                "[download] Destination: /archive/すごい動画 [abc123]/すごい動画 [abc123].webm"
+            ],
             {"title": "すごい動画 [abc123]"},
         ),
         (
@@ -68,14 +70,14 @@ def make_source(tmp_path: Path, name: str, *, enabled: bool = True) -> Source:
         (
             [
                 "[download] 100% of 50.0MiB in 00:10",
-                "[Merger] Merging formats into \"vid [abc].mkv\"",
+                '[Merger] Merging formats into "vid [abc].mkv"',
             ],
             {"phase": "merging", "pct": None},
         ),
         (
             [
                 "[download] 100% of 50.0MiB in 00:10",
-                "[EmbedThumbnail] Adding thumbnail to \"vid [abc].mkv\"",
+                '[EmbedThumbnail] Adding thumbnail to "vid [abc].mkv"',
             ],
             {"phase": "embedding", "pct": None},
         ),
@@ -108,6 +110,102 @@ def test_parse_progress(lines: list[str], expected: dict) -> None:
     assert set(result) == {"pct", "speed", "eta", "size", "title", "phase"}
     for key, value in expected.items():
         assert result[key] == value
+
+
+_FFMPEG_LINE = (
+    "frame=315480 fps=298 q=-1.0 size= 3941120KiB time=02:00:00.00 "
+    "bitrate=3070.2kbits/s speed=   8x elapsed=0:17:39.75"
+)
+
+
+def test_parse_progress_ffmpeg_downloader() -> None:
+    result = monitor.parse_progress(
+        [
+            "[download] Destination: 苦行 [abc123]/苦行 [abc123].mp4",
+            "Input #0, hls, from 'https://example.com/master.m3u8':",
+            "  Duration: 04:00:00.00, start: 0.000000, bitrate: 0 kb/s",
+            "[https @ 0x55] Opening 'https://example.com/media.361.mp4' for reading",
+            _FFMPEG_LINE,
+        ]
+    )
+    assert result == {
+        "pct": 50.0,
+        "speed": "8x",
+        "eta": "15:00",  # (4h - 2h) / 8x
+        "size": "3941120KiB",
+        "title": "苦行 [abc123]",
+        "phase": "downloading",
+    }
+
+
+def test_parse_progress_ffmpeg_eta_shows_hours() -> None:
+    result = monitor.parse_progress(
+        [
+            "[download] Destination: vid [abc]/vid [abc].mp4",
+            "  Duration: 06:00:00.00, start: 0.000000, bitrate: 0 kb/s",
+            (
+                "frame=1 fps=0.0 q=-1.0 size= 100KiB time=00:00:00.00 "
+                "bitrate=3000kbits/s speed=   2x elapsed=0:00:00.50"
+            ),
+        ]
+    )
+    assert result["eta"] == "3:00:00"
+
+
+def test_parse_progress_ffmpeg_without_duration_or_destination() -> None:
+    result = monitor.parse_progress([_FFMPEG_LINE])
+    assert result["phase"] == "downloading"
+    assert result["speed"] == "8x"
+    assert result["pct"] is None
+    assert result["eta"] is None
+
+
+def test_parse_progress_ffmpeg_ignores_previous_videos_duration() -> None:
+    result = monitor.parse_progress(
+        [
+            "  Duration: 01:00:00.00, start: 0.000000, bitrate: 0 kb/s",
+            "[download] Destination: vid [abc]/vid [abc].mp4",
+            _FFMPEG_LINE,
+        ]
+    )
+    assert result["pct"] is None
+    assert result["title"] == "vid [abc]"
+
+
+def test_parse_progress_ffmpeg_speed_not_available() -> None:
+    result = monitor.parse_progress(
+        [
+            "[download] Destination: vid [abc]/vid [abc].mp4",
+            "  Duration: 04:00:00.00, start: 0.000000, bitrate: 0 kb/s",
+            (
+                "frame=1 fps=0.0 q=-1.0 size=N/A time=02:00:00.00 "
+                "bitrate=N/A speed=N/A elapsed=0:00:00.50"
+            ),
+        ]
+    )
+    assert result["speed"] is None
+    assert result["size"] is None
+    assert result["pct"] == 50.0
+    assert result["eta"] is None
+
+
+def test_watch_window_extends_to_destination_marker(tmp_path: Path) -> None:
+    log_path = tmp_path / "run.log"
+    filler = "x" * 100
+    lines = (
+        [f"early {filler}"] * 10
+        + ["[download] Destination: vid [abc]/vid [abc].mp4"]
+        + [f"frame=1 {filler}"] * 2000
+    )
+    log_path.write_text("\n".join(lines) + "\n")
+
+    window = monitor.watch_window(log_path)
+    assert any("Destination" in line for line in window)
+    assert window[-1].startswith("frame=1")
+
+    capped = monitor.watch_window(log_path, max_bytes=1024)
+    assert not any("Destination" in line for line in capped)
+    assert monitor.watch_window(tmp_path / "missing.log") == []
 
 
 def test_parse_progress_completed_download_and_id_fallback() -> None:
@@ -153,7 +251,9 @@ def test_tail_lines_reads_last_lines_and_tolerates_missing_file(tmp_path: Path) 
     assert monitor.tail_lines(tmp_path / "missing.log") == []
 
 
-def test_running_sources_returns_held_locks_in_config_order(monkeypatch, tmp_path: Path) -> None:
+def test_running_sources_returns_held_locks_in_config_order(
+    monkeypatch, tmp_path: Path
+) -> None:
     config = Config(
         defaults={},
         sources=[
