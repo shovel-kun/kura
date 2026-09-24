@@ -330,15 +330,22 @@ class TestBuildCommandStrategy:
         ]
 
     def test_quick_contains_required_flags(self, tmp_path: Path) -> None:
-        """Quick command contains --lazy-playlist, --break-on-existing, --break-per-input."""
+        """Quick command uses a bounded window, not break-on-existing.
+
+        break-on-existing stops at the first archived entry and cannot see a
+        hole in the archive below newer uploads; the bounded --playlist-items
+        window examines the newest _QUICK_WINDOW entries per tab regardless.
+        """
         output_dir = tmp_path / "out"
         source = self._make_quick_source(output_dir)
         tab_urls = _channel_tab_urls(source.url)
         cmd = build_command(source, "/path/to/profile.conf", strategy_args=_QUICK_FLAGS, urls=tab_urls)
 
         assert "--lazy-playlist" in cmd
-        assert "--break-on-existing" in cmd
-        assert "--break-per-input" in cmd
+        window_idx = cmd.index("--playlist-items")
+        assert cmd[window_idx + 1] == "1:50"
+        assert "--break-on-existing" not in cmd
+        assert "--break-per-input" not in cmd
 
     def test_quick_flags_before_urls(self, tmp_path: Path) -> None:
         """Quick flags appear before the tab URLs."""
@@ -358,8 +365,8 @@ class TestBuildCommandStrategy:
         cmd = build_command(source, "/path/to/profile.conf")
 
         assert cmd[-1] == "https://example.com/channel"
-        assert "--lazy-playlist" not in cmd
         assert "--break-on-existing" not in cmd
+        assert "--playlist-items" not in cmd
 
     def test_channel_tab_urls_handle_forms(self) -> None:
         """_channel_tab_urls works for various YouTube channel URL forms."""
@@ -441,6 +448,15 @@ class TestClassifyLine:
             "ERROR: [youtube] abcDEF12345: Sign in to confirm you're not a bot",
             "transient",
         ),
+        # Errors without a per-video id: mid-download failures, tab authcheck.
+        (
+            "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+            "transient",
+        ),
+        (
+            "ERROR: [youtube:tab] UCabc123456789: Playlists that require authentication may not extract correctly",
+            "transient",
+        ),
         # No match
         (
             "Downloading video abc123",
@@ -491,7 +507,6 @@ class TestFailureRows:
         output_dir.mkdir()
         make_config_yaml(config_dir, output_dir, update_strategy="full", url="https://example.com/ch")
         assert main(["init"]) == 0
-
         bin_dir = tmp_path / "bin"
         write_fake_ytdlp(bin_dir, exit_code=0, extra_output=extra_output)
         monkeypatch.setenv("PATH", str(bin_dir) + ":" + os.environ.get("PATH", ""))
@@ -617,6 +632,51 @@ class TestFailureRows:
         summary = row[0]
         assert "permanent" in summary
         assert "transient" in summary
+
+    def test_source_level_failure_without_video_id(self, monkeypatch, tmp_path) -> None:
+        """Id-less transient errors (mid-download 403) → one '(source)' row, attempts accumulate."""
+        output = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path, extra_output=output)
+
+        from kura import paths
+        from kura.config import load_config
+        from kura.failures import SOURCE_FAILURE_ID
+        from kura.runner import run_source
+
+        config = load_config()
+        source = config.sources[0]
+        source_for_run = Source(
+            name=source.name,
+            url=source.url,
+            output_dir=source.output_dir,
+            archive_file=source.archive_file,
+            profile=source.profile,
+            cookies=source.cookies,
+            schedule=source.schedule,
+            update_strategy="full",
+            full_reindex_every="7d",
+            extra_args=source.extra_args,
+            enabled=source.enabled,
+        )
+
+        run_source(source_for_run, paths.config_dir(), paths.state_dir())
+        run_source(source_for_run, paths.config_dir(), paths.state_dir())
+
+        db_path = state_dir / "state.db"
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT video_id, kind, attempts FROM video_failures"
+                " WHERE source = 'test-src' AND video_id = ?",
+                (SOURCE_FAILURE_ID,),
+            ).fetchone()
+            summary = conn.execute(
+                "SELECT failure_summary FROM runs WHERE source = 'test-src' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+
+        assert row is not None, "source-level failure must be recorded, not dropped"
+        assert row[1] == "transient"
+        assert row[2] == 2, "one error line per run → attempts == runs"
+        assert summary is not None and "transient" in summary[0]
 
 
 # ---------------------------------------------------------------------------
@@ -919,6 +979,59 @@ class TestRssStrategy:
         # Should have fallen through to a download call.
         download_calls = self._get_download_calls(argv_file)
         assert len(download_calls) >= 1
+
+
+    def test_feed_rotation_falls_through_to_quick(self, monkeypatch, tmp_path, capsys) -> None:
+        """A fully rotated feed window must not be trusted as 'nothing new'."""
+        config_dir, state_dir, output_dir, argv_file = self._setup(
+            monkeypatch,
+            tmp_path,
+            archive_entries=[
+                "youtube vidAAA",
+                "youtube vidBBB",
+                "youtube vid111",
+                "youtube vid222",
+            ],
+        )
+        db_path = state_dir / "state.db"
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
+
+        # First check: establishes the remembered feed window.
+        self._mock_rss(monkeypatch, ["vidAAA", "vidBBB"])
+        main(["run", "test-src"])
+        capsys.readouterr()
+        assert self._get_download_calls(argv_file) == []
+
+        # Second check: window fully rotated to disjoint IDs (burst uploads
+        # scrolled past unseen videos).  Even though every feed ID is archived,
+        # the run must escalate to quick instead of reporting nothing new.
+        self._mock_rss(monkeypatch, ["vid111", "vid222"])
+        main(["run", "test-src"])
+        out = capsys.readouterr().out
+        assert "! rss feed fully rotated" in out
+        assert self._get_download_calls(argv_file), "must fall through to a quick run"
+
+    def test_feed_overlap_is_trusted(self, monkeypatch, tmp_path, capsys) -> None:
+        """Partial overlap bounds the missed tail to zero — no escalation needed."""
+        config_dir, state_dir, output_dir, argv_file = self._setup(
+            monkeypatch,
+            tmp_path,
+            archive_entries=["youtube vidAAA", "youtube vidBBB", "youtube vidCCC"],
+        )
+        db_path = state_dir / "state.db"
+        set_last_full_run_at(db_path, "test-src", datetime.now(tz=UTC).isoformat())
+
+        self._mock_rss(monkeypatch, ["vidAAA", "vidBBB"])
+        main(["run", "test-src"])
+        capsys.readouterr()
+        argv_file.write_text("")
+
+        # vidAAA still present → fewer than one full window of new uploads.
+        self._mock_rss(monkeypatch, ["vidAAA", "vidCCC"])
+        main(["run", "test-src"])
+        out = capsys.readouterr().out
+        assert "fully rotated" not in out
+        assert self._get_download_calls(argv_file) == []
 
     def test_channel_id_cached_on_second_run(self, monkeypatch, tmp_path, capsys) -> None:
         """channel_id resolved once and cached; second run reads from DB without re-invoking yt-dlp."""

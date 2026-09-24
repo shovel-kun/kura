@@ -16,6 +16,14 @@ class Classification(NamedTuple):
     kind: str | None  # 'permanent' | 'transient' | None
 
 
+# Sentinel video_id for error lines that carry no per-video identifier
+# (e.g. "ERROR: unable to download video data: HTTP Error 403" or channel-tab
+# level errors).  Recorded in video_failures so `kura status` and the TUI can
+# surface *source-level* failures instead of silently dropping them.
+SOURCE_FAILURE_ID = "(source)"
+
+
+
 # Pattern for the standard yt-dlp error prefix: "ERROR: [youtube] VIDEOID: message"
 _ERROR_PREFIX = re.compile(
     r"ERROR:\s+\[(?:youtube|YoutubeTab|youtube:tab)\]\s+([A-Za-z0-9_-]{3,32}):\s+(.*)",
@@ -41,6 +49,10 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"temporary failure", re.IGNORECASE), "transient"),
     (re.compile(r"fragment \S+ not found", re.IGNORECASE), "transient"),
     (re.compile(r"sign in to confirm you.?re not a bot", re.IGNORECASE), "transient"),
+    # Errors without a per-video id: mid-download fetch failures and the
+    # channel-tab auth check (stale cookies / broken extractor build).
+    (re.compile(r"unable to download (?:video data|webpage|API page)", re.IGNORECASE), "transient"),
+    (re.compile(r"playlists? that require authentication", re.IGNORECASE), "transient"),
 ]
 
 

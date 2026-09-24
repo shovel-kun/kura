@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from croniter import croniter
@@ -911,6 +911,29 @@ def _status_detail(source, db, *, config: Config | None = None) -> int:
                 f"{ui.dim(f'{attempts} attempts {ui.DOT}')} {trunc}"
             )
         print(ui.dim(f"  suppress with `kura suppress {name} VIDEO_ID`"))
+
+    # Transient failures (recent, will be retried).
+    if db is not None:
+        week_ago = (datetime.now(tz=UTC) - timedelta(days=7)).isoformat()
+        transient = db.execute(
+            """
+            SELECT video_id, attempts, last_error
+            FROM video_failures
+            WHERE source = ? AND kind = 'transient' AND last_seen >= ?
+            ORDER BY attempts DESC, video_id
+            LIMIT 5
+            """,
+            (name, week_ago),
+        ).fetchall()
+        if transient:
+            print()
+            print(ui.dim("  failing transiently (retried on later runs)"))
+            for vid_id, attempts, last_error in transient:
+                trunc = (last_error or "")[:60]
+                print(
+                    f"  {ui.yellow('!')} {vid_id}   "
+                    f"{ui.dim(f'{attempts} attempts {ui.DOT}')} {trunc}"
+                )
 
     # Suppressions.
     if db is not None:

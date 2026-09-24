@@ -10,6 +10,7 @@ from pathlib import Path
 from . import archive, notify, paths, state, ui
 from .config import Source, load_nnconf, parse_duration
 from .failures import (
+    SOURCE_FAILURE_ID,
     classify_line,
     classify_nndownload_failure,
     missing_tabs,
@@ -115,7 +116,14 @@ def build_nndownload_command(source: Source, profile_args: list[str]) -> list[st
 # Quick strategy helpers
 # ---------------------------------------------------------------------------
 
-_QUICK_FLAGS = ["--lazy-playlist", "--break-on-existing", "--break-per-input"]
+# How many of the newest entries per channel tab the quick strategy examines.
+# The window must be gap-proof: with --break-on-existing a hole in the archive
+# below newer uploads is unreachable (the run stops at the first archived
+# entry), so a bounded --playlist-items window is used instead.  Anything
+# stranded deeper than this is caught by the periodic full reindex.
+_QUICK_WINDOW = 50
+
+_QUICK_FLAGS = ["--lazy-playlist", "--playlist-items", f"1:{_QUICK_WINDOW}"]
 
 
 def _channel_tab_urls(channel_url: str) -> list[str]:
@@ -148,6 +156,32 @@ def _fetch_rss_video_ids(channel_id: str, *, timeout: int = 30) -> list[str]:
         if vid:
             ids.append(vid.strip())
     return ids
+
+
+def _seen_feed_ids(db: object, source_name: str) -> set[str] | None:
+    """Return the video IDs seen in the previous rss check, or None if none."""
+    row = db.execute(  # type: ignore[union-attr]
+        "SELECT feed_ids FROM rss_feed_seen WHERE source = ?",
+        (source_name,),
+    ).fetchone()
+    if row is None or not row[0]:
+        return None
+    return set(row[0].split(","))
+
+
+def _remember_feed_ids(db: object, source_name: str, feed_video_ids: list[str]) -> None:
+    """Persist the current feed window for the next rotation check."""
+    with db:  # type: ignore[union-attr]
+        db.execute(
+            """
+            INSERT INTO rss_feed_seen (source, feed_ids, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(source) DO UPDATE SET
+                feed_ids = excluded.feed_ids,
+                updated_at = excluded.updated_at
+            """,
+            (source_name, ",".join(feed_video_ids), datetime.now(tz=UTC).isoformat()),
+        )
 
 
 def _resolve_channel_id(
@@ -572,6 +606,18 @@ def _try_rss_check(
         print(ui.yellow(f"! rss feed fetch failed: {exc}; falling through to quick"))
         return None
 
+    # YouTube's channel feed exposes only ~15 entries.  If every ID seen on
+    # the previous check has scrolled out of the window, the channel has
+    # published a full window (or more) of new videos since then and the tail
+    # may contain items this check can never see.  Fall through to the quick
+    # strategy, which enumerates the channel without the feed limit.
+    prev_feed_ids = _seen_feed_ids(db, source.name)
+    if prev_feed_ids is not None and prev_feed_ids.isdisjoint(feed_video_ids):
+        print(ui.yellow("! rss feed fully rotated since last check; falling through to quick"))
+        _remember_feed_ids(db, source.name, feed_video_ids)
+        return None
+    _remember_feed_ids(db, source.name, feed_video_ids)
+
     # Check which are already archived.
     archive_set = archive.read_archive(source.archive_file)
     missing = [vid for vid in feed_video_ids if f"youtube {vid}" not in archive_set]
@@ -682,28 +728,28 @@ def _collect_failures(
             continue
         counts[cls.kind] = counts.get(cls.kind, 0) + 1
 
-        if cls.video_id is not None:
-            with db:
-                db.execute(
-                    """
-                    INSERT INTO video_failures
-                        (source, video_id, url, kind, attempts, last_seen, last_error)
-                    VALUES (?, ?, ?, ?, 1, ?, ?)
-                    ON CONFLICT(source, video_id) DO UPDATE SET
-                        attempts   = attempts + 1,
-                        last_seen  = excluded.last_seen,
-                        last_error = excluded.last_error,
-                        kind       = excluded.kind
-                    """,
-                    (
-                        source_name,
-                        cls.video_id,
-                        None,
-                        cls.kind,
-                        now,
-                        line.strip()[:500],
-                    ),
-                )
+        video_id = cls.video_id if cls.video_id is not None else SOURCE_FAILURE_ID
+        with db:
+            db.execute(
+                """
+                INSERT INTO video_failures
+                    (source, video_id, url, kind, attempts, last_seen, last_error)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(source, video_id) DO UPDATE SET
+                    attempts   = attempts + 1,
+                    last_seen  = excluded.last_seen,
+                    last_error = excluded.last_error,
+                    kind       = excluded.kind
+                """,
+                (
+                    source_name,
+                    video_id,
+                    None,
+                    cls.kind,
+                    now,
+                    line.strip()[:500],
+                ),
+            )
 
     parts = []
     if counts.get("permanent", 0):

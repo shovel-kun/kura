@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS channel_cache (
     resolved_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS rss_feed_seen (
+    source TEXT PRIMARY KEY,
+    feed_ids TEXT,
+    updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS source_state (
     source TEXT PRIMARY KEY,
     last_check_at TEXT,

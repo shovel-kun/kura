@@ -128,7 +128,7 @@ Each source has an `update_strategy` that controls how `kura run` invokes yt-dlp
 | Strategy | URL requirement | Behaviour |
 |----------|-----------------|-----------|
 | `full` | any URL | Plain yt-dlp invocation with the source URL. Always valid. |
-| `quick` | YouTube channel URL only | Derives three tab URLs (`/videos`, `/shorts`, `/streams`) and runs a single yt-dlp invocation with `--lazy-playlist --break-on-existing --break-per-input`. |
+| `quick` | YouTube channel URL only | Derives three tab URLs (`/videos`, `/shorts`, `/streams`) and runs a single yt-dlp invocation with `--lazy-playlist --playlist-items 1:50`. The bounded window examines the newest 50 entries per tab regardless of archive state, so holes in the archive below newer uploads are still caught. |
 | `rss` | YouTube channel URL only | Fetches the channel RSS feed; if all items are already archived, records a no-op run without invoking yt-dlp. Otherwise falls through to `quick`. On feed errors, logs a warning and falls through to `quick`. |
 
 Set the strategy in `config.yaml` or with `kura add --strategy STRATEGY`.
