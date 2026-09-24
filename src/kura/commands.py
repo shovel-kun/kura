@@ -1221,34 +1221,29 @@ def doctor_command(_args) -> int:
         has_fail = True
         print(f"{ui.red(ui.FAIL)} {msg}")
 
-    # 1. yt-dlp on PATH.
-    ytdlp_path = shutil.which("yt-dlp")
-    if ytdlp_path is None:
-        fail("yt-dlp not found on PATH")
+    # 1. yt-dlp package.  kura always runs its own yt_dlp (``sys.executable
+    # -m yt_dlp``, see runner.ytdlp_prefix), so the bundled copy is what
+    # matters — a PATH binary is irrelevant to kura's health.
+    try:
+        import yt_dlp
+
+        ytdlp_version = yt_dlp.version.__version__
+    except Exception as exc:
+        fail(f"yt-dlp package unavailable in kura's environment: {exc}")
     else:
-        try:
-            ver_result = subprocess.run(
-                ["yt-dlp", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            ytdlp_version = ver_result.stdout.strip()
-            ok(f"yt-dlp {ytdlp_version}")
-            # Warn if the version date is older than 90 days.
-            # yt-dlp versions are YYYY.MM.DD (optionally with .N suffix).
-            import re as _re
-            m = _re.match(r"(\d{4})\.(\d{2})\.(\d{2})", ytdlp_version)
-            if m:
-                ver_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-                age_days = (date.today() - ver_date).days
-                if age_days > 90:
-                    warn(
-                        f"yt-dlp version is {age_days} days old ({ytdlp_version}); "
-                        "consider updating — extractors rot"
-                    )
-        except Exception as exc:
-            fail(f"yt-dlp --version failed: {exc}")
+        ok(f"yt-dlp {ytdlp_version}")
+        # Warn if the version date is older than 90 days.
+        # yt-dlp versions are YYYY.MM.DD (optionally with .N suffix).
+        import re as _re
+        m = _re.match(r"(\d{4})\.(\d{2})\.(\d{2})", ytdlp_version)
+        if m:
+            ver_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            age_days = (date.today() - ver_date).days
+            if age_days > 90:
+                warn(
+                    f"yt-dlp version is {age_days} days old ({ytdlp_version}); "
+                    "consider updating — extractors rot"
+                )
 
     # 2. ffmpeg on PATH.
     if shutil.which("ffmpeg") is None:

@@ -10,7 +10,7 @@ from pathlib import Path
 from kura.cli import main
 from kura.config import Source
 from kura.failures import missing_tabs
-from kura.runner import _print_run_summary, build_command, run_source
+from kura.runner import _print_run_summary, build_command, run_source, ytdlp_prefix
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -162,6 +162,14 @@ def write_fake_ytdlp(
 # ---------------------------------------------------------------------------
 # Tests 1–4: build_command
 # ---------------------------------------------------------------------------
+
+
+def test_ytdlp_prefix_defaults_to_bundled_package(real_ytdlp_prefix) -> None:
+    """Production prefix runs kura's own yt_dlp so the download subprocess and
+    the in-process archive-key computation (kura.archive) share one version."""
+    import sys
+
+    assert ytdlp_prefix() == [sys.executable, "-m", "yt_dlp"]
 
 
 def test_build_command_no_cookies(tmp_path: Path) -> None:

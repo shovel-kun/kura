@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
@@ -17,6 +18,17 @@ from .failures import (
     parse_result_line,
 )
 from .locks import source_lock
+
+
+def ytdlp_prefix() -> list[str]:
+    """Argv prefix invoking yt-dlp: kura's own yt_dlp package, not PATH.
+
+    The subprocess driving downloads and the in-process yt_dlp used by
+    :mod:`kura.archive` must be the same version, so both go through
+    ``sys.executable -m yt_dlp``.  (The test suite fakes yt-dlp via PATH
+    scripts and swaps this prefix out; see tests/conftest.py.)
+    """
+    return [sys.executable, "-m", "yt_dlp"]
 
 
 def build_command(
@@ -45,7 +57,7 @@ def build_command(
         Override the URL list; defaults to ``[source.url]``.
     """
     cmd: list[str] = [
-        "yt-dlp",
+        *ytdlp_prefix(),
         "--ignore-config",
         "--config-locations", str(profile_path),
         "--download-archive", str(source.archive_file),
@@ -204,7 +216,7 @@ def _resolve_channel_id(
     # Resolve via yt-dlp.
     cookies_args: list[str] = shlex.split(source.cookies) if source.cookies else []
     cmd = [
-        "yt-dlp",
+        *ytdlp_prefix(),
         "--ignore-config",
         "--print", "%(channel_id)s",
         "--playlist-items", "1",
@@ -363,7 +375,7 @@ def _run_source_locked(
         downloader_version = f"nndownload {version_result.stdout.strip()}"
     else:
         version_result = subprocess.run(
-            ["yt-dlp", "--version"],
+            [*ytdlp_prefix(), "--version"],
             capture_output=True,
             text=True,
         )

@@ -51,7 +51,7 @@ Use `--once` to print one script-friendly snapshot and exit. Use `--interval SEC
 
 `kura logs NAME` prints the last 50 lines of the most recent run log for the named source.  Use `-n N` to override the line count.  Use `--path` to print only the absolute path of the log file (useful for piping into a pager: `less "$(kura logs NAME --path)"`).
 
-`kura doctor` runs a series of health checks and reports each as `ok:`, `warn:`, or `FAIL:`.  Exits 0 when no `FAIL` lines were emitted (warnings are allowed), exits 1 otherwise.  Checks include: yt-dlp on PATH and version freshness (warns if > 90 days old), ffmpeg on PATH, config.yaml validity, per-source output_dir and archive accessibility, cookies file existence, state.db integrity, currently-running sources (lock probe), and systemd timer status.
+`kura doctor` runs a series of health checks and reports each as `ok:`, `warn:`, or `FAIL:`.  Exits 0 when no `FAIL` lines were emitted (warnings are allowed), exits 1 otherwise.  Checks include: kura's bundled yt-dlp package and version freshness (warns if > 90 days old; kura runs its own yt_dlp rather than a PATH binary), ffmpeg on PATH, config.yaml validity, per-source output_dir and archive accessibility, cookies file existence, state.db integrity, currently-running sources (lock probe), and systemd timer status.
 
 ## Searching the library
 

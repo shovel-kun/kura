@@ -9,7 +9,7 @@ dependencies = [
     "rich>=13",
     "ruamel.yaml",
     "textual>=0.80",
-    "yt-dlp",
+    "yt-dlp>=2026.8.19",
 ]
 
 [project.scripts]

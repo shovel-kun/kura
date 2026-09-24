@@ -401,8 +401,10 @@ class TestDoctorCommand:
         bin_dir = tmp_path / "bin"
         write_fake_ffmpeg(bin_dir)
         write_fake_systemctl(bin_dir)
-        # Ensure a clean PATH with no real yt-dlp or ffmpeg
         monkeypatch.setenv("PATH", str(bin_dir))
+        # doctor checks kura's bundled yt_dlp, not PATH — hide the package.
+        import sys
+        monkeypatch.setitem(sys.modules, "yt_dlp", None)
 
         rc = main(["doctor"])
         out = capsys.readouterr().out
@@ -412,7 +414,8 @@ class TestDoctorCommand:
 
     def test_stale_ytdlp_version_warns_but_exits_0(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """A yt-dlp version > 90 days old → warning but no failure, exit 0."""
-        self._setup_healthy(monkeypatch, tmp_path, ytdlp_version="2024.01.01")
+        self._setup_healthy(monkeypatch, tmp_path)
+        monkeypatch.setattr("yt_dlp.version.__version__", "2024.01.01")
         capsys.readouterr()  # flush init output
         rc = main(["doctor"])
         out = capsys.readouterr().out
@@ -427,7 +430,8 @@ class TestDoctorCommand:
         import datetime as _dt
         recent = date.today() - _dt.timedelta(days=30)
         ver = recent.strftime("%Y.%m.%d")
-        self._setup_healthy(monkeypatch, tmp_path, ytdlp_version=ver)
+        self._setup_healthy(monkeypatch, tmp_path)
+        monkeypatch.setattr("yt_dlp.version.__version__", ver)
         capsys.readouterr()  # flush init output
         rc = main(["doctor"])
         out = capsys.readouterr().out
