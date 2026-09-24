@@ -18,6 +18,10 @@ _PROGRESS_RE = re.compile(
 )
 _DESTINATION_RE = re.compile(r"\[download\]\s+Destination:\s+(.+)$")
 _VIDEO_ID_RE = re.compile(r"(?:\[youtube\]|\[info\])\s+([^:]+):")
+_NND_ITEM_RE = re.compile(r"^(?P<index>\d+)/(?P<total>\d+)$")
+_NND_DESTINATION_RE = re.compile(
+    r'^Downloading\s+\S+\s+to\s+["\'](?P<path>.+)["\']\.\.\.$'
+)
 # External-downloader runs (--downloader ffmpeg) log ffmpeg's own status lines
 # instead of yt-dlp's [download] lines, e.g.:
 #   frame=  120 fps=0.0 q=-1.0 size=    1536KiB time=00:00:03.99 bitrate=3146.6kbits/s speed=   8x elapsed=0:00:00.50
@@ -41,6 +45,8 @@ class WatchSnapshot:
     title: str | None = None
     phase: str = "working"
     archive_delta: int = 0
+    item_index: int | None = None
+    item_total: int | None = None
 
 
 def running_sources(config: Config, state_dir: Path) -> list[str]:
@@ -179,28 +185,48 @@ def watch_window(path: Path, max_bytes: int = 4 * 1024 * 1024) -> list[str]:
 
 
 def parse_progress(lines: list[str]) -> dict[str, Any]:
-    """Extract the latest useful yt-dlp progress signals from log lines."""
+    """Extract the latest useful yt-dlp or nndownload progress signals."""
     pct: float | None = None
     speed: str | None = None
     eta: str | None = None
     size: str | None = None
     title: str | None = None
+    item_index: int | None = None
+    item_total: int | None = None
+
+    # nndownload emits a stable ``N/TOTAL`` marker before each video. Limit
+    # phase/title parsing to that item's lines so a just-started item does not
+    # inherit the previous video's comments or metadata phase.
+    item_marker_index: int | None = None
+    for index in range(len(lines) - 1, -1, -1):
+        item = _NND_ITEM_RE.fullmatch(lines[index].strip())
+        if item:
+            item_index = int(item.group("index"))
+            item_total = int(item.group("total"))
+            item_marker_index = index
+            break
+    current_lines = lines[item_marker_index:] if item_marker_index is not None else lines
 
     dest_index: int | None = None
-    for index in range(len(lines) - 1, -1, -1):
-        destination = _DESTINATION_RE.search(lines[index])
+    for index in range(len(current_lines) - 1, -1, -1):
+        destination = _DESTINATION_RE.search(current_lines[index])
         if destination:
             title = Path(destination.group(1).strip().strip("\"'")).parent.name or None
             dest_index = index
             break
+        nnd_destination = _NND_DESTINATION_RE.search(current_lines[index])
+        if nnd_destination:
+            title = Path(nnd_destination.group("path")).parent.name or None
+            dest_index = index
+            break
     if title is None:
-        for line in reversed(lines):
+        for line in reversed(current_lines):
             video_id = _VIDEO_ID_RE.search(line)
             if video_id:
                 title = video_id.group(1).strip()
                 break
 
-    for line in reversed(lines):
+    for line in reversed(current_lines):
         progress = _PROGRESS_RE.search(line)
         if progress:
             pct = float(progress.group("pct"))
@@ -210,13 +236,31 @@ def parse_progress(lines: list[str]) -> dict[str, Any]:
             break
         ffmpeg = _FFMPEG_PROGRESS_RE.search(line)
         if ffmpeg:
-            duration = _current_video_duration(lines, dest_index)
+            duration = _current_video_duration(current_lines, dest_index)
             pct, speed, eta, size = _ffmpeg_progress(ffmpeg, duration)
             break
 
-    phase = "working"
-    for line in reversed(lines):
+    phase = "starting" if item_marker_index is not None else "working"
+    for line in reversed(current_lines):
         lower = line.lower()
+        if "archiving comments for" in lower:
+            phase = "comments"
+            break
+        if "downloading thumbnail for" in lower:
+            phase = "thumbnail"
+            break
+        if "downloading metadata for" in lower or "adding metadata to" in lower:
+            phase = "metadata"
+            break
+        if "merging audio and video" in lower:
+            phase = "merging"
+            break
+        if _NND_DESTINATION_RE.search(line):
+            phase = "downloading"
+            break
+        if "retrieving video manifest" in lower or "collecting video media uris" in lower:
+            phase = "preparing"
+            break
         if "[youtube:tab]" in lower and (
             "downloading api json" in lower
             or re.search(r"\bpage\s+\d+\b", lower)
@@ -258,13 +302,13 @@ def parse_progress(lines: list[str]) -> dict[str, Any]:
         if _PROGRESS_RE.search(line) or _FFMPEG_PROGRESS_RE.search(line):
             phase = "downloading"
             break
-        if "has already been recorded" in lower:
+        if "has already been recorded" in lower or lower.startswith("[result] skip"):
             phase = "skipping"
             break
 
     # Only an active download shows the progress bar. During any post-download
     # phase (remux/merge/embed/comments/…), the last progress line is a stale
-    # 100% — clear it so the view shows "… <phase>" rather than a frozen bar.
+    # 100% — clear it so the view shows the current phase instead.
     if phase != "downloading":
         pct = speed = eta = size = None
 
@@ -275,6 +319,8 @@ def parse_progress(lines: list[str]) -> dict[str, Any]:
         "size": size,
         "title": title,
         "phase": phase,
+        "item_index": item_index,
+        "item_total": item_total,
     }
 
 
@@ -327,7 +373,12 @@ def render_watch(snapshots: list[WatchSnapshot], *, tz: object | None = None) ->
             continue
 
         source = Text(f"● {snapshot.name}", style="yellow")
-        if snapshot.pct is None:
+        if snapshot.item_index is not None and snapshot.item_total is not None:
+            progress = Text(
+                f"{snapshot.item_index}/{snapshot.item_total} · {snapshot.phase}",
+                style="yellow",
+            )
+        elif snapshot.pct is None:
             progress = Text("…  " + snapshot.phase, style="yellow")
         else:
             completed = min(20, round(snapshot.pct / 5))

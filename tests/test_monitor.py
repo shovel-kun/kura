@@ -107,7 +107,9 @@ def make_source(tmp_path: Path, name: str, *, enabled: bool = True) -> Source:
 )
 def test_parse_progress(lines: list[str], expected: dict) -> None:
     result = monitor.parse_progress(lines)
-    assert set(result) == {"pct", "speed", "eta", "size", "title", "phase"}
+    assert set(result) == {
+        "pct", "speed", "eta", "size", "title", "phase", "item_index", "item_total"
+    }
     for key, value in expected.items():
         assert result[key] == value
 
@@ -135,6 +137,8 @@ def test_parse_progress_ffmpeg_downloader() -> None:
         "size": "3941120KiB",
         "title": "苦行 [abc123]",
         "phase": "downloading",
+        "item_index": None,
+        "item_total": None,
     }
 
 
@@ -222,7 +226,53 @@ def test_parse_progress_completed_download_and_id_fallback() -> None:
         "size": "106.91MiB",
         "title": "abc123",
         "phase": "downloading",
+        "item_index": None,
+        "item_total": None,
     }
+
+
+def test_parse_progress_nndownload_reports_item_phase_and_title() -> None:
+    result = monitor.parse_progress(
+        [
+            "14/529",
+            "[result] ok sm-old",
+            "15/529",
+            "Retrieving video manifest...",
+            (
+                'Downloading sm45111915 to "sm45111915 - Dance title/'
+                'sm45111915 - Dance title.mp4"...'
+            ),
+            "Finished downloading thumbnail for sm45111915.",
+            "Archiving comments for sm45111915 (ja-jp, en-us, zh-tw)...",
+        ]
+    )
+
+    assert result == {
+        "pct": None,
+        "speed": None,
+        "eta": None,
+        "size": None,
+        "title": "sm45111915 - Dance title",
+        "phase": "comments",
+        "item_index": 15,
+        "item_total": 529,
+    }
+
+
+def test_parse_progress_nndownload_does_not_reuse_previous_item_phase() -> None:
+    result = monitor.parse_progress(
+        [
+            "14/529",
+            "Archiving comments for sm-old (ja-jp, en-us, zh-tw)...",
+            "[result] ok sm-old",
+            "15/529",
+        ]
+    )
+
+    assert result["item_index"] == 15
+    assert result["item_total"] == 529
+    assert result["phase"] == "starting"
+    assert result["title"] is None
 
 
 def test_current_log_uses_newest_mtime(tmp_path: Path) -> None:
@@ -305,3 +355,23 @@ def test_render_watch_contains_running_and_idle_sources() -> None:
     assert "idle" in text
     assert "42%" in text
     assert "+2 new" in text
+
+
+def test_render_watch_shows_nndownload_item_progress() -> None:
+    snapshot = monitor.WatchSnapshot(
+        name="nico",
+        running=True,
+        title="sm45111915 - Dance title",
+        phase="comments",
+        item_index=15,
+        item_total=529,
+    )
+    output = io.StringIO()
+    Console(file=output, force_terminal=False, width=100).print(
+        monitor.render_watch([snapshot])
+    )
+
+    text = output.getvalue()
+    assert "15/529" in text
+    assert "comments" in text
+    assert "sm45111915 - Dance title" in text
