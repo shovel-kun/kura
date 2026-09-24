@@ -476,12 +476,7 @@ def is_youtube_channel_url(url: str) -> bool:
     if host not in {"youtube.com", "m.youtube.com"}:
         return False
     path = parsed.path.rstrip("/")
-    return (
-        path.startswith("/@")
-        or path.startswith("/channel/")
-        or path.startswith("/c/")
-        or path.startswith("/user/")
-    )
+    return path.startswith(("/@", "/channel/", "/c/", "/user/"))
 
 
 def set_source_enabled(name: str, *, enabled: bool, config_path: Path | None = None) -> None:

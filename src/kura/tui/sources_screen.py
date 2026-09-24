@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from typing import ClassVar
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -16,7 +17,7 @@ from kura.config import load_config, set_source_enabled
 
 
 class SourcesScreen(Screen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "library", "Library", priority=True),
         Binding("r", "run_now", "Run now"),
         Binding("l", "toggle_log", "Log"),

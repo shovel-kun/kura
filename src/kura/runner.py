@@ -161,7 +161,6 @@ def _fetch_rss_video_ids(channel_id: str, *, timeout: int = 30) -> list[str]:
     with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
         xml_bytes = resp.read()
     root = ET.fromstring(xml_bytes)  # noqa: S314
-    ns = {"yt": "http://www.youtube.com/xml/schemas/2015"}
     ids: list[str] = []
     for elem in root.iter("{http://www.youtube.com/xml/schemas/2015}videoId"):
         vid = elem.text
@@ -224,11 +223,11 @@ def _resolve_channel_id(
         source.url,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
         channel_id = result.stdout.strip()
         if not channel_id or not channel_id.startswith("UC"):
             return None
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
 
     # Cache it.
@@ -371,6 +370,7 @@ def _run_source_locked(
             ["nndownload", "--version"],
             capture_output=True,
             text=True,
+            check=False,
         )
         downloader_version = f"nndownload {version_result.stdout.strip()}"
     else:
@@ -378,6 +378,7 @@ def _run_source_locked(
             [*ytdlp_prefix(), "--version"],
             capture_output=True,
             text=True,
+            check=False,
         )
         downloader_version = version_result.stdout.strip()
 
@@ -603,7 +604,7 @@ def _try_rss_check(
     try:
         with db:
             channel_id = _resolve_channel_id(source, db)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — any failure here must fall through to quick, never abort the run
         print(ui.yellow(f"! rss channel_id resolution failed: {exc}; falling through to quick"))
         return None
 
@@ -614,7 +615,7 @@ def _try_rss_check(
     # Fetch feed.
     try:
         feed_video_ids = _fetch_rss_video_ids(channel_id)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — feed trouble falls back to the quick strategy
         print(ui.yellow(f"! rss feed fetch failed: {exc}; falling through to quick"))
         return None
 

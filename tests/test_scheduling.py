@@ -5,7 +5,7 @@ import os
 import sqlite3
 import stat
 import textwrap
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from kura.cli import main
@@ -163,7 +163,7 @@ class TestComputeNextDue:
         last = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC).isoformat()
         next_dt = compute_next_due(self.SCHEDULE, last)
         assert next_dt.hour == 18
-        assert next_dt.date() == datetime(2024, 6, 1).date()
+        assert next_dt.date() == date(2024, 6, 1)
 
     def test_null_last_check_returns_past_sentinel(self):
         """compute_next_due with None returns a past sentinel (year 1970)."""
@@ -195,7 +195,7 @@ class TestRunDue:
 
     def test_run_due_only_runs_due_source(self, monkeypatch, tmp_path, capsys):
         """Only src-a (due) runs; src-b (just ran) is skipped."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
         # src-b just checked → reliably not due on a 6h schedule. (croniter's next
@@ -225,7 +225,7 @@ class TestRunDue:
 
     def test_run_due_updates_source_state_for_due_source_only(self, monkeypatch, tmp_path):
         """source_state.last_check_at is updated only for the source that ran."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
         recent = datetime.now(tz=UTC).isoformat()
@@ -249,7 +249,7 @@ class TestRunDue:
 
     def test_run_all_runs_both_enabled_sources(self, monkeypatch, tmp_path):
         """--all runs both enabled sources regardless of schedule."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
         # Make src-b appear to have just run (not due)
@@ -272,7 +272,7 @@ class TestRunDue:
 
     def test_run_all_skips_disabled_source(self, monkeypatch, tmp_path, capsys):
         """--all still honours the enabled flag."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
 
         # Disable src-b
         assert main(["pause", "src-b"]) == 0
@@ -293,7 +293,7 @@ class TestRunDue:
 
     def test_run_name_force_runs_disabled_source(self, monkeypatch, tmp_path, capsys):
         """kura run NAME --force runs a disabled source."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
         assert main(["pause", "src-a"]) == 0
@@ -310,7 +310,7 @@ class TestRunDue:
 
     def test_run_name_disabled_without_force_fails(self, monkeypatch, tmp_path, capsys):
         """kura run NAME without --force on a disabled source exits 1."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
 
         assert main(["pause", "src-a"]) == 0
         capsys.readouterr()
@@ -359,7 +359,7 @@ class TestLocking:
 
     def test_run_source_skipped_when_lock_held(self, monkeypatch, tmp_path, capsys):
         """kura run NAME exits 0 with skip message when source lock is held."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
         with source_lock("test-src", state_dir) as acquired:
@@ -380,7 +380,7 @@ class TestLocking:
 
     def test_import_skipped_when_lock_held(self, monkeypatch, tmp_path, capsys):
         """kura import NAME exits 1 with skip message when source lock is held."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
 
         with source_lock("test-src", state_dir) as acquired:
             assert acquired is True
@@ -392,7 +392,7 @@ class TestLocking:
 
     def test_import_does_not_touch_archive_when_lock_held(self, monkeypatch, tmp_path, capsys):
         """When import is skipped due to lock, archive file is not modified."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
         out = tmp_path / "out"
 
         archive_path = out / "archive.txt"
@@ -446,7 +446,7 @@ class TestPauseResume:
 
     def test_pause_flips_enabled_to_false(self, monkeypatch, tmp_path, capsys):
         """kura pause NAME sets enabled=false in config.yaml."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
 
         result = main(["pause", "test-src"])
         assert result == 0
@@ -460,7 +460,7 @@ class TestPauseResume:
 
     def test_resume_flips_enabled_to_true(self, monkeypatch, tmp_path, capsys):
         """kura resume NAME sets enabled=true after pause."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
 
         main(["pause", "test-src"])
         capsys.readouterr()
@@ -477,7 +477,7 @@ class TestPauseResume:
 
     def test_pause_preserves_yaml_comments(self, monkeypatch, tmp_path):
         """Comments in config.yaml survive a pause operation."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
         config_path = config_dir / "config.yaml"
 
         # Add a comment to the config.
@@ -491,7 +491,7 @@ class TestPauseResume:
 
     def test_pause_already_paused_exits_0(self, monkeypatch, tmp_path, capsys):
         """Pausing an already-disabled source is idempotent and exits 0."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
 
         main(["pause", "test-src"])
         capsys.readouterr()
@@ -503,7 +503,7 @@ class TestPauseResume:
 
     def test_resume_already_enabled_exits_0(self, monkeypatch, tmp_path, capsys):
         """Resuming an already-enabled source is idempotent and exits 0."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
 
         result = main(["resume", "test-src"])
         assert result == 0
@@ -512,7 +512,7 @@ class TestPauseResume:
 
     def test_pause_unknown_source_exits_1(self, monkeypatch, tmp_path, capsys):
         """kura pause UNKNOWN exits 1 with an error message."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
 
         result = main(["pause", "no-such-source"])
         assert result == 1
@@ -521,7 +521,7 @@ class TestPauseResume:
 
     def test_resume_unknown_source_exits_1(self, monkeypatch, tmp_path, capsys):
         """kura resume UNKNOWN exits 1 with an error message."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
 
         result = main(["resume", "no-such-source"])
         assert result == 1

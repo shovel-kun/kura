@@ -104,12 +104,10 @@ def classify_line(line: str) -> Classification:
     """
     # Try to extract the video id from the standard ERROR prefix.
     video_id: str | None = None
-    message: str = line
 
     m = _ERROR_PREFIX.match(line.strip())
     if m:
         video_id = m.group(1)
-        message = m.group(2)
 
     # Check all patterns against the full line (not just the extracted message)
     # so we catch error text that appears in lines without the standard prefix.

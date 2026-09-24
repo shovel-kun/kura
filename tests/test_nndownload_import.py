@@ -283,7 +283,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Import appends both yt-dlp and nndownload keys."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -292,7 +292,7 @@ class TestImportMixedTree:
         meta = self._build_mixed_tree(output_dir)
 
         assert main(["import", "yt-src"]) == 0
-        out = capsys.readouterr().out
+        capsys.readouterr()
 
         archive_path = output_dir / "archive.txt"
         content = archive_path.read_text(encoding="utf-8")
@@ -307,7 +307,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Archive keys for nndownload sidecars use 'niconico' prefix."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -329,7 +329,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """*.comments.json files are never treated as nndownload evidence."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -359,7 +359,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """A .json file without a valid id is silently ignored (no warning)."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -379,7 +379,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """A broken generic .json is silently skipped (NOT warned about)."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -398,7 +398,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """A broken .info.json continues to be warned about (existing behaviour)."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -416,7 +416,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Media file with a qualifying nndownload sidecar is NOT unverifiable."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -438,7 +438,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Media with only a .comments.json sibling is unverifiable."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -461,7 +461,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """--dry-run with nndownload sidecars reports would-append count, writes nothing."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -483,7 +483,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Running import twice appends 0 on second run (idempotent)."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -504,7 +504,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Two sidecars with the same video id → only one archive entry."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -516,7 +516,7 @@ class TestImportMixedTree:
             write_nn_sidecar(nd, "sm88", f"dup-{suffix}")
 
         assert main(["import", "yt-src"]) == 0
-        out = capsys.readouterr().out
+        capsys.readouterr()
 
         # Only 1 unique key
         archive_path = output_dir / "archive.txt"
@@ -527,7 +527,7 @@ class TestImportMixedTree:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Full mixed-tree test: yt-dlp + nndownload + unrelated + comments-only."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -572,7 +572,7 @@ class TestSuppressExtractorDefault:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """yt-dlp source → suppress defaults to 'youtube' extractor."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -611,7 +611,7 @@ class TestSuppressExtractorDefault:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """nndownload source → suppress defaults to 'niconico' extractor."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_niconico_config(config_dir, output_dir)
@@ -650,7 +650,7 @@ class TestSuppressExtractorDefault:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Explicit --extractor overrides the source-derived default."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_niconico_config(config_dir, output_dir)
@@ -670,7 +670,7 @@ class TestSuppressExtractorDefault:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """Explicit --extractor niconico overrides youtube default on ytdlp source."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_ytdlp_config(config_dir, output_dir)
@@ -686,7 +686,7 @@ class TestSuppressExtractorDefault:
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
         """The confirmation message mentions the extractor that was used."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_niconico_config(config_dir, output_dir)

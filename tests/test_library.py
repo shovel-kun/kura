@@ -299,13 +299,13 @@ class TestSearch:
         assert "Recent Video" not in out
 
     def test_since_date_form(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        from datetime import date, timedelta
+        from datetime import UTC, datetime, timedelta
 
         yt_dir, _n, _s = self._setup(monkeypatch, tmp_path)
         write_yt_video(yt_dir, "ytRECENT1111", "Recent Video")
         write_yt_video(yt_dir, "ytOLDER22222", "Older Video", mtime=time.time() - 10 * 86400)
 
-        cutoff = (date.today() - timedelta(days=3)).isoformat()
+        cutoff = (datetime.now(tz=UTC).date() - timedelta(days=3)).isoformat()
         assert main(["search", "--since", cutoff]) == 0
         out = capsys.readouterr().out
         assert "Recent Video" in out

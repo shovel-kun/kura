@@ -5,7 +5,7 @@ import os
 import sqlite3
 import stat
 import textwrap
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -223,7 +223,7 @@ class TestLogsCommand:
 
     def test_no_log_dir_exits_0(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """Graceful when log directory for source doesn't exist at all."""
-        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
         capsys.readouterr()  # flush init output
         # Don't create the log dir for the source.
         rc = main(["logs", "test-src"])
@@ -371,7 +371,7 @@ class TestDoctorCommand:
         assert "✓ ffmpeg" in out
 
     def test_missing_ffmpeg_exits_1_with_fail(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_config_yaml(config_dir, output_dir)
@@ -391,7 +391,7 @@ class TestDoctorCommand:
         assert "ffmpeg" in out
 
     def test_missing_ytdlp_exits_1_with_fail(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_config_yaml(config_dir, output_dir)
@@ -428,7 +428,7 @@ class TestDoctorCommand:
         """A yt-dlp version < 90 days old → no version warning."""
         # Use a version from 30 days ago.
         import datetime as _dt
-        recent = date.today() - _dt.timedelta(days=30)
+        recent = datetime.now(tz=UTC).date() - _dt.timedelta(days=30)
         ver = recent.strftime("%Y.%m.%d")
         self._setup_healthy(monkeypatch, tmp_path)
         monkeypatch.setattr("yt_dlp.version.__version__", ver)
@@ -442,7 +442,7 @@ class TestDoctorCommand:
         assert lines_with_old == []
 
     def test_broken_config_exits_1_fail_skips_per_source(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         config_dir.mkdir(parents=True, exist_ok=True)
         # Write a config with a missing required field (triggers ConfigError).
         write_profile(config_dir)
@@ -471,7 +471,7 @@ sources: []
     def test_cookies_file_missing_exits_1_fail(
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         write_profile(config_dir)
@@ -507,7 +507,7 @@ sources:
         assert "cookies" in out.lower()
 
     def test_cookies_from_browser_reports_ok(self, monkeypatch, tmp_path: Path, capsys) -> None:
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         write_profile(config_dir)
@@ -686,7 +686,7 @@ class TestConcurrentRun:
 
     def test_all_sources_run_with_concurrency(self, monkeypatch, tmp_path: Path) -> None:
         """With concurrency 2 and 3 sources, all 3 complete successfully."""
-        config_dir, state_dir = self._setup(monkeypatch, tmp_path, concurrency=2, num_sources=3)
+        _config_dir, state_dir = self._setup(monkeypatch, tmp_path, concurrency=2, num_sources=3)
 
         rc = main(["run", "--all"])
         assert rc == 0
@@ -733,7 +733,7 @@ class TestConcurrentRun:
     def test_quiet_mode_output_in_log_file(self, monkeypatch, tmp_path: Path) -> None:
         """In concurrent mode, per-line output still written to log file."""
         known_line = "UNIQUE_LOG_ONLY_LINE_ABC"
-        config_dir, state_dir = self._setup(
+        _config_dir, state_dir = self._setup(
             monkeypatch,
             tmp_path,
             concurrency=2,
@@ -754,7 +754,7 @@ class TestConcurrentRun:
     def test_single_source_not_quiet(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """kura run NAME always streams output regardless of concurrency setting."""
         known_line = "SERIAL_STREAMING_OUTPUT_QRS"
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         make_config_yaml(config_dir, output_dir, concurrency=4)
@@ -770,7 +770,7 @@ class TestConcurrentRun:
 
     def test_failed_source_propagates_exit_1(self, monkeypatch, tmp_path: Path) -> None:
         """If any concurrent source fails, the overall exit is 1."""
-        config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+        config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
         sources = [(f"src-{i}", tmp_path / f"out{i}") for i in range(2)]
         for _, d in sources:
             d.mkdir()
@@ -817,7 +817,7 @@ class TestLocalTimeDisplay:
 
     def test_status_detail_uses_self_explanatory_next_time(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """kura status NAME shows a relative next-check line."""
-        _config_dir, state_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir = self._setup(monkeypatch, tmp_path)
         main(["status", "test-src"])
         out = capsys.readouterr().out
         assert "next check" in out.lower()

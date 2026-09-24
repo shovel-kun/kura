@@ -312,7 +312,7 @@ def test_defaults_notify_false_never_calls_notify_send(monkeypatch, tmp_path: Pa
 
 def test_run_command_wires_defaults_notify_false(monkeypatch, tmp_path: Path) -> None:
     """End-to-end: `kura run NAME` respects defaults.notify=false via run_command."""
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     make_config(config_dir, output_dir, notify=False)
@@ -470,7 +470,7 @@ def test_send_notification_preserves_existing_dbus_address(monkeypatch, tmp_path
 
 
 def test_doctor_reports_notify_send_found(monkeypatch, tmp_path: Path, capsys) -> None:
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     make_config(config_dir, output_dir)
@@ -490,7 +490,7 @@ def test_doctor_reports_notify_send_found(monkeypatch, tmp_path: Path, capsys) -
 
 
 def test_doctor_warns_when_notify_send_missing(monkeypatch, tmp_path: Path, capsys) -> None:
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     make_config(config_dir, output_dir)
@@ -508,7 +508,7 @@ def test_doctor_warns_when_notify_send_missing(monkeypatch, tmp_path: Path, caps
 
 
 def test_doctor_skips_notify_check_when_disabled(monkeypatch, tmp_path: Path, capsys) -> None:
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     make_config(config_dir, output_dir, notify=False)

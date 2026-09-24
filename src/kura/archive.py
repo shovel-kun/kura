@@ -66,7 +66,7 @@ def nndownload_sidecar_info(path: Path) -> dict | None:
     """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, ValueError):
         return None  # silently skip; not our file
 
     if not isinstance(data, dict):

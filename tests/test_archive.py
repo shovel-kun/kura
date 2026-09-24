@@ -341,7 +341,7 @@ def test_import_dry_run_no_changes(monkeypatch, tmp_path: Path, capsys) -> None:
 
 
 def test_import_idempotent(monkeypatch, tmp_path: Path, capsys) -> None:
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -359,7 +359,7 @@ def test_import_idempotent(monkeypatch, tmp_path: Path, capsys) -> None:
 
 
 def test_import_creates_archive_when_absent(monkeypatch, tmp_path: Path, capsys) -> None:
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 

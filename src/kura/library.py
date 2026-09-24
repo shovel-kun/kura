@@ -143,7 +143,7 @@ def _parse_ytdlp_sidecar(path: Path) -> tuple | None:
     """Parse a yt-dlp ``*.info.json``; parse errors are tolerated silently."""
     try:
         info = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, ValueError):
         return None
     if not isinstance(info, dict):
         return None
@@ -535,6 +535,7 @@ def _run_fzf(rows: list[dict], *, single_source: bool) -> int:
         input="\n".join(lines) + ("\n" if lines else ""),
         stdout=subprocess.PIPE,
         text=True,
+        check=False,
     )
     if proc.returncode == 130:  # esc / ctrl-c
         return 0

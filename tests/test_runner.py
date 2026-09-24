@@ -191,7 +191,6 @@ def test_build_command_cookies_string(tmp_path: Path) -> None:
     output_dir = tmp_path / "output"
     source = make_source(output_dir, cookies="--cookies-from-browser firefox")
     cmd = build_command(source, "/path/to/profile.conf")
-    archive_idx = cmd.index("--download-archive")
     # cookies args follow immediately after the archive value
     assert "--cookies-from-browser" in cmd
     assert "firefox" in cmd
@@ -336,7 +335,7 @@ def test_run_source_exit3_no_archive_lines(monkeypatch, tmp_path: Path, capsys) 
 
 def test_verify_fake_ytdlp_three_lines(monkeypatch, tmp_path: Path, capsys) -> None:
     """verify command counts 3 pending items from fake yt-dlp stdout."""
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 

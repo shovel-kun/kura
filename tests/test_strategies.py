@@ -720,7 +720,7 @@ class TestFullReindexPromotion:
 
     def test_null_last_full_run_promotes_to_full(self, monkeypatch, tmp_path, capsys) -> None:
         """quick source with NULL last_full_run_at → promoted to full (single URL)."""
-        config_dir, state_dir, argv_file = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir, argv_file = self._setup(monkeypatch, tmp_path)
 
         result = main(["run", "test-src"])
         assert result == 0
@@ -737,7 +737,7 @@ class TestFullReindexPromotion:
 
     def test_recent_last_full_run_uses_quick(self, monkeypatch, tmp_path, capsys) -> None:
         """quick source with recent last_full_run_at → stays as quick (tab URLs)."""
-        config_dir, state_dir, argv_file = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir, argv_file = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
         # Set last_full_run_at to 1 hour ago (well within 7d interval).
@@ -759,7 +759,7 @@ class TestFullReindexPromotion:
 
     def test_old_last_full_run_promotes_again(self, monkeypatch, tmp_path, capsys) -> None:
         """quick source with last_full_run_at > 7d ago → promoted to full."""
-        config_dir, state_dir, argv_file = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir, argv_file = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
         # Set last_full_run_at to 8 days ago.
@@ -779,7 +779,7 @@ class TestFullReindexPromotion:
 
     def test_quick_run_does_not_update_last_full_run_at(self, monkeypatch, tmp_path, capsys) -> None:
         """A quick (non-promoted) run must NOT update last_full_run_at."""
-        config_dir, state_dir, argv_file = self._setup(monkeypatch, tmp_path)
+        _config_dir, state_dir, _argv_file = self._setup(monkeypatch, tmp_path)
         db_path = state_dir / "state.db"
 
         # Set a recent last_full_run_at so no promotion happens.
@@ -865,7 +865,7 @@ class TestRssStrategy:
 
     def test_all_known_ids_no_ytdlp_download(self, monkeypatch, tmp_path, capsys) -> None:
         """If all RSS feed videos are in archive → no yt-dlp download invocation."""
-        config_dir, state_dir, output_dir, argv_file = self._setup(
+        _config_dir, state_dir, _output_dir, argv_file = self._setup(
             monkeypatch,
             tmp_path,
             archive_entries=["youtube vidAAA", "youtube vidBBB"],
@@ -888,7 +888,7 @@ class TestRssStrategy:
 
     def test_all_known_ids_runs_row_recorded(self, monkeypatch, tmp_path, capsys) -> None:
         """RSS nothing-new path records a runs row with exit_code=0 and ytdlp_version='rss-check'."""
-        config_dir, state_dir, output_dir, argv_file = self._setup(
+        _config_dir, state_dir, _output_dir, _argv_file = self._setup(
             monkeypatch,
             tmp_path,
             archive_entries=["youtube vidAAA"],
@@ -913,7 +913,7 @@ class TestRssStrategy:
 
     def test_all_known_ids_last_check_at_updated(self, monkeypatch, tmp_path, capsys) -> None:
         """RSS nothing-new path updates last_check_at in source_state."""
-        config_dir, state_dir, output_dir, argv_file = self._setup(
+        _config_dir, state_dir, _output_dir, _argv_file = self._setup(
             monkeypatch,
             tmp_path,
             archive_entries=["youtube vidAAA"],
@@ -935,7 +935,7 @@ class TestRssStrategy:
 
     def test_unknown_id_falls_through_to_quick(self, monkeypatch, tmp_path, capsys) -> None:
         """One unknown RSS video → falls through to quick run (yt-dlp download invoked)."""
-        config_dir, state_dir, output_dir, argv_file = self._setup(
+        _config_dir, state_dir, _output_dir, argv_file = self._setup(
             monkeypatch,
             tmp_path,
             archive_entries=["youtube vidAAA"],
@@ -956,7 +956,7 @@ class TestRssStrategy:
 
     def test_rss_fetch_error_falls_through_to_quick(self, monkeypatch, tmp_path, capsys) -> None:
         """RSS fetch failure → warning printed, falls through to quick run."""
-        config_dir, state_dir, output_dir, argv_file = self._setup(
+        _config_dir, state_dir, _output_dir, argv_file = self._setup(
             monkeypatch,
             tmp_path,
         )
@@ -983,7 +983,7 @@ class TestRssStrategy:
 
     def test_feed_rotation_falls_through_to_quick(self, monkeypatch, tmp_path, capsys) -> None:
         """A fully rotated feed window must not be trusted as 'nothing new'."""
-        config_dir, state_dir, output_dir, argv_file = self._setup(
+        _config_dir, state_dir, _output_dir, argv_file = self._setup(
             monkeypatch,
             tmp_path,
             archive_entries=[
@@ -1013,7 +1013,7 @@ class TestRssStrategy:
 
     def test_feed_overlap_is_trusted(self, monkeypatch, tmp_path, capsys) -> None:
         """Partial overlap bounds the missed tail to zero — no escalation needed."""
-        config_dir, state_dir, output_dir, argv_file = self._setup(
+        _config_dir, state_dir, _output_dir, argv_file = self._setup(
             monkeypatch,
             tmp_path,
             archive_entries=["youtube vidAAA", "youtube vidBBB", "youtube vidCCC"],
@@ -1035,7 +1035,7 @@ class TestRssStrategy:
 
     def test_channel_id_cached_on_second_run(self, monkeypatch, tmp_path, capsys) -> None:
         """channel_id resolved once and cached; second run reads from DB without re-invoking yt-dlp."""
-        config_dir, state_dir, output_dir, argv_file = self._setup(
+        _config_dir, state_dir, _output_dir, argv_file = self._setup(
             monkeypatch,
             tmp_path,
             channel_id="UCfakeChannelId123456789",
@@ -1196,7 +1196,7 @@ class TestSuppress:
         from kura import paths
         from kura.locks import source_lock
 
-        _config_dir, state_dir, _output_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir, _output_dir = self._setup(monkeypatch, tmp_path)
 
         with source_lock("test-src", paths.state_dir()) as acquired:
             assert acquired is True
@@ -1306,7 +1306,7 @@ class TestStatusDetail:
 
     def test_status_name_shows_source_detail(self, monkeypatch, tmp_path, capsys) -> None:
         """kura status NAME shows detailed view for one source."""
-        _config_dir, state_dir, _output_dir = self._setup(monkeypatch, tmp_path)
+        _config_dir, _state_dir, _output_dir = self._setup(monkeypatch, tmp_path)
 
         result = main(["status", "test-src"])
         assert result == 0

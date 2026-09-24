@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import ClassVar
 
 from rich.cells import cell_len
 from rich.text import Text
@@ -34,7 +35,7 @@ def _truncate_cells(text: str, max_cells: int) -> str:
 
 
 class LibraryScreen(Screen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("/", "focus_search", "Search"),
         Binding("escape", "focus_table", "Results", show=False),
         Binding("enter", "play", "Play", priority=True),

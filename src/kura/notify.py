@@ -40,6 +40,6 @@ def send_notification(title: str, body: str, *, critical: bool = False) -> None:
         env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={env['XDG_RUNTIME_DIR']}/bus"
 
     try:
-        subprocess.run(cmd, env=env, timeout=10, capture_output=True)
-    except Exception:
+        subprocess.run(cmd, env=env, timeout=10, capture_output=True, check=False)
+    except Exception:  # noqa: BLE001, S110 — a failed notification must never fail the run
         pass

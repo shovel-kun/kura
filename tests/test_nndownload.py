@@ -824,7 +824,7 @@ def test_run_nndownload_quick_promoted_to_full(monkeypatch, tmp_path: Path, caps
 
 def test_verify_nndownload_pending_two(monkeypatch, tmp_path: Path, capsys) -> None:
     """Fake --list-ids prints 3 ids, 1 already archived → pending 2."""
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -851,7 +851,7 @@ def test_verify_nndownload_zero_ids_with_nonempty_archive_exits_1(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:
     """Fake --list-ids prints nothing but archive is non-empty → exit 1."""
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -881,7 +881,7 @@ def test_verify_nndownload_zero_ids_with_nonempty_archive_exits_1(
 
 def test_doctor_unpatched_nndownload_fails(monkeypatch, tmp_path: Path, capsys) -> None:
     """Doctor reports FAIL when nndownload --help lacks --download-archive."""
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -908,7 +908,7 @@ def test_doctor_unpatched_nndownload_fails(monkeypatch, tmp_path: Path, capsys) 
 
 def test_doctor_patched_nndownload_ok(monkeypatch, tmp_path: Path, capsys) -> None:
     """Doctor reports ok when nndownload --help has --download-archive."""
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -928,7 +928,7 @@ def test_doctor_patched_nndownload_ok(monkeypatch, tmp_path: Path, capsys) -> No
 
     monkeypatch.setenv("PATH", str(bin_dir) + ":" + os.environ.get("PATH", ""))
 
-    result = main(["doctor"])
+    main(["doctor"])
     # May still have warnings (output_dir doesn't exist, etc.) but key check is ok.
     captured = capsys.readouterr()
     assert "unpatched nndownload" not in captured.out
@@ -937,7 +937,7 @@ def test_doctor_patched_nndownload_ok(monkeypatch, tmp_path: Path, capsys) -> No
 
 def test_doctor_session_cookie_missing_fails(monkeypatch, tmp_path: Path, capsys) -> None:
     """Doctor FAIL when session-cookie file is missing."""
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -990,7 +990,7 @@ sources:
 
 def test_add_command_nndownload_flags(monkeypatch, tmp_path: Path, capsys) -> None:
     """kura add with --downloader nndownload --auth adds an nndownload source."""
-    config_dir, state_dir = set_kura_dirs(monkeypatch, tmp_path)
+    _config_dir, _state_dir = set_kura_dirs(monkeypatch, tmp_path)
 
     # init first.
     assert main(["init"]) == 0

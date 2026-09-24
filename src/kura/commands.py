@@ -178,7 +178,7 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
     if output_dir.is_dir():
         for p in sorted(output_dir.rglob("*.json")):
             name_str = p.name
-            if name_str.endswith(".info.json") or name_str.endswith(".comments.json"):
+            if name_str.endswith((".info.json", ".comments.json")):
                 continue
             nn_json_paths.append(p)
 
@@ -191,7 +191,7 @@ def _import_locked(source, name: str, dry_run: bool) -> int:
     for info_path in info_json_paths:
         try:
             info = json.loads(info_path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, ValueError):
             skipped_unparseable.append(info_path)
             continue
 
@@ -363,7 +363,7 @@ def _query_last_check_at(db_path: Path, name: str) -> str | None:
                 (name,),
             ).fetchone()
         return row[0] if row else None
-    except Exception:
+    except sqlite3.Error:
         return None
 
 
@@ -400,7 +400,6 @@ def run_command(args) -> int:
 
     # --- kura run --due / --all ---
     due_mode: bool = getattr(args, "due", False)
-    all_mode: bool = getattr(args, "all", False)
 
     now = datetime.now(tz=UTC)
     any_failure = False
@@ -489,6 +488,7 @@ def verify_command(args) -> int:
         stdout=subprocess.PIPE,
         stderr=None,
         text=True,
+        check=False,
     )
 
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
@@ -514,6 +514,7 @@ def _verify_nndownload(source) -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        check=False,
     )
 
     # Parse ids: non-empty token lines that look like video IDs.
@@ -1228,7 +1229,7 @@ def doctor_command(_args) -> int:
         import yt_dlp
 
         ytdlp_version = yt_dlp.version.__version__
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — doctor reports any failure instead of crashing
         fail(f"yt-dlp package unavailable in kura's environment: {exc}")
     else:
         ok(f"yt-dlp {ytdlp_version}")
@@ -1238,7 +1239,7 @@ def doctor_command(_args) -> int:
         m = _re.match(r"(\d{4})\.(\d{2})\.(\d{2})", ytdlp_version)
         if m:
             ver_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-            age_days = (date.today() - ver_date).days
+            age_days = (datetime.now(tz=UTC).date() - ver_date).days
             if age_days > 90:
                 warn(
                     f"yt-dlp version is {age_days} days old ({ytdlp_version}); "
@@ -1255,7 +1256,7 @@ def doctor_command(_args) -> int:
     try:
         config = load_config()
         ok("config.yaml")
-    except (ConfigError, Exception) as exc:
+    except Exception as exc:  # noqa: BLE001 — doctor reports the error instead of crashing
         fail(f"config.yaml: {exc}")
         return 1  # skip per-source checks
 
@@ -1279,10 +1280,11 @@ def doctor_command(_args) -> int:
                     capture_output=True,
                     text=True,
                     timeout=15,
+                    check=False,
                 )
                 nn_version = nn_ver_result.stdout.strip()
                 ok(f"nndownload {nn_version}")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — doctor reports any failure instead of crashing
                 fail(f"nndownload --version failed: {exc}")
                 nn_version = ""
 
@@ -1293,6 +1295,7 @@ def doctor_command(_args) -> int:
                     capture_output=True,
                     text=True,
                     timeout=15,
+                    check=False,
                 )
                 help_text = help_result.stdout + help_result.stderr
                 if "--download-archive" not in help_text:
@@ -1302,7 +1305,7 @@ def doctor_command(_args) -> int:
                     )
                 else:
                     ok("nndownload patched")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — doctor reports any failure instead of crashing
                 fail(f"nndownload --help failed: {exc}")
 
     # 4. Per-source checks.
@@ -1310,14 +1313,17 @@ def doctor_command(_args) -> int:
         prefix = f"source {source.name!r}"
         checks: list[tuple[str, str]] = []
 
-        def source_ok(message: str) -> None:
-            checks.append(("ok", message))
+        # These closures are only invoked within this same loop iteration, so
+        # binding the current list as a default argument is safe and silences
+        # the late-binding concern (B023).
+        def source_ok(message: str, _checks: list[tuple[str, str]] = checks) -> None:
+            _checks.append(("ok", message))
 
-        def source_warn(message: str) -> None:
-            checks.append(("warn", message))
+        def source_warn(message: str, _checks: list[tuple[str, str]] = checks) -> None:
+            _checks.append(("warn", message))
 
-        def source_fail(message: str) -> None:
-            checks.append(("fail", message))
+        def source_fail(message: str, _checks: list[tuple[str, str]] = checks) -> None:
+            _checks.append(("fail", message))
 
         # output_dir.
         if not source.output_dir.exists():
@@ -1392,7 +1398,7 @@ def doctor_command(_args) -> int:
                 ok(f"state.db integrity ok ({db_size} bytes, {db_path})")
             else:
                 fail(f"state.db PRAGMA quick_check returned {result!r}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — doctor reports any failure instead of crashing
             fail(f"state.db could not be opened: {exc}")
 
     # 6. Currently-running sources (lock probe).
@@ -1413,13 +1419,14 @@ def doctor_command(_args) -> int:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                check=False,
             )
             status = result.stdout.strip()
             if status == "active":
                 ok("kura.timer is active")
             else:
                 warn(f"kura.timer {status} — scheduling not enabled (see README)")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — doctor reports any failure instead of crashing
             warn(f"could not query kura.timer: {exc}")
 
     return 1 if has_fail else 0
