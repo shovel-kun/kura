@@ -497,9 +497,14 @@ def test_doctor_warns_when_notify_send_missing(monkeypatch, tmp_path: Path, caps
     assert main(["init"]) == 0
     capsys.readouterr()
 
-    # PATH with no notify-send anywhere (only python3, to avoid unrelated
-    # shebang-resolution failures for any other fake executables on PATH).
-    monkeypatch.setenv("PATH", _python3_dir())
+    # Simulate notify-send being absent without assuming the python3 directory
+    # does not also contain notify-send.
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda command: None if command == "notify-send" else real_which(command),
+    )
 
     main(["doctor"])
     out = capsys.readouterr().out
