@@ -308,3 +308,17 @@ loginctl enable-linger $USER
 ```
 
 The timer fires every 15 minutes (`OnCalendar=*:0/15`); `Persistent=true` means a missed tick (e.g. after suspend) is caught on the next boot.  kura then checks each source's cron schedule independently, so sources with e.g. `0 */6 * * *` only actually run every 6 hours.
+
+## Development
+
+kura uses [uv](https://docs.astral.sh/uv/) for dependency management and [hk](https://hk.jdx.dev/) for git hooks:
+
+```sh
+uv sync              # create the venv from uv.lock
+uv run pytest -q     # run the test suite
+uv run ruff check .  # lint
+
+hk install           # activate pre-commit / commit-msg / pre-push hooks
+```
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/) — `feat:`, `fix:`, and friends, with an optional scope such as `fix(watch):`.  The `commit-msg` hook enforces this locally and CI validates every pushed subject.  The pre-commit hook runs ruff plus whitespace, conflict-marker, and private-key checks; the pre-push hook runs the test suite.  Prefix a command with `HK=0` to bypass the hooks in a pinch.
