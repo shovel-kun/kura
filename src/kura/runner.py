@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import archive, notify, paths, state, ui
+from . import archive, integrity, notify, paths, state, ui
 from .config import Source, load_nnconf, parse_duration
 from .failures import (
     SOURCE_FAILURE_ID,
@@ -449,6 +449,19 @@ def _run_source_locked(
 
     # 11. Diff archive to find newly downloaded items.
     new_keys = archive.read_archive(source.archive_file) - old_keys
+
+    # 11b. Verify what this run wrote.  A failing disk can corrupt a file
+    # without yt-dlp noticing; an archived corrupt copy is never fetched again.
+    # Best-effort: an OSError here (likely on the very disk being checked)
+    # must not stop the run from being recorded.
+    corrupt_keys: set[str] = set()
+    try:
+        corrupt_keys = _drop_corrupt_downloads(source, new_keys, db)
+        if source.downloader != "nndownload":
+            _clean_failed_postprocess(source, output_lines)
+    except OSError as exc:
+        print(ui.red(f"integrity check failed: {exc}"))
+    new_keys -= corrupt_keys
     new_count = len(new_keys)
 
     # 12. Classify failures from output lines.
@@ -456,6 +469,9 @@ def _run_source_locked(
         failure_summary = _collect_nndownload_failures(source.name, output_lines, db)
     else:
         failure_summary = _collect_failures(source.name, output_lines, db)
+    if corrupt_keys:
+        corrupt_note = f"{len(corrupt_keys)} corrupt"
+        failure_summary = f"{failure_summary}, {corrupt_note}" if failure_summary else corrupt_note
 
     # 12b. Send a best-effort desktop notification summarizing the outcome.
     if notify:
@@ -719,6 +735,83 @@ def _notify_run_outcome(
 
     if failure_summary:
         notify.send_notification(f"kura: {source_name}", f"no new videos; {failure_summary}")
+
+
+# ---------------------------------------------------------------------------
+# Download integrity
+# ---------------------------------------------------------------------------
+
+
+def _drop_corrupt_downloads(
+    source: Source,
+    new_keys: set[str],
+    db: object,  # sqlite3.Connection
+) -> set[str]:
+    """Check the media of each newly archived key; un-archive and delete corrupt ones.
+
+    Each corrupt video gets a transient ``video_failures`` row, so it shows
+    up in ``kura status`` and is downloaded again on the next run.  Returns
+    the keys that were dropped.
+    """
+    dropped: set[str] = set()
+    now = datetime.now(tz=UTC).isoformat()
+    for key in sorted(new_keys):
+        problems = [
+            (path, problem)
+            for path in integrity.media_files_for_key(source.output_dir, key)
+            if (problem := integrity.check_media(path)) is not None
+        ]
+        if not problems:
+            continue
+        for path, problem in problems:
+            path.unlink(missing_ok=True)
+            print(ui.red(f"corrupt download removed: {path.name} ({problem})"))
+        try:
+            archive.remove_archive_entry(source.archive_file, key)
+        except (FileNotFoundError, ValueError):
+            pass
+        video_id = key.split()[-1]
+        with db:  # type: ignore[union-attr]
+            db.execute(  # type: ignore[union-attr]
+                """
+                INSERT INTO video_failures
+                    (source, video_id, url, kind, attempts, last_seen, last_error)
+                VALUES (?, ?, ?, 'transient', 1, ?, ?)
+                ON CONFLICT(source, video_id) DO UPDATE SET
+                    attempts   = attempts + 1,
+                    last_seen  = excluded.last_seen,
+                    last_error = excluded.last_error,
+                    kind       = excluded.kind
+                """,
+                (source.name, video_id, None, now, f"corrupt download: {problems[0][1]}"),
+            )
+        dropped.add(key)
+    return dropped
+
+
+def _clean_failed_postprocess(source: Source, output_lines: list[str]) -> None:
+    """Remove corrupt leftovers of a failed merge/postprocess so the next run starts fresh.
+
+    yt-dlp reuses existing format fragments and merged outputs, so without
+    this a single corrupt fragment fails the same merge on every run.  Only
+    files that fail :func:`integrity.check_media` are removed (plus ``.temp``
+    files, which are always partial) — if the media is sound the failure has
+    some other cause, and re-downloading would not help.
+    """
+    for printed in integrity.postprocess_targets(output_lines):
+        target = Path(printed)
+        if not target.is_absolute():
+            target = source.output_dir / target
+        removed: list[str] = []
+        if target.is_file() and integrity.check_media(target) is not None:
+            target.unlink(missing_ok=True)
+            removed.append(target.name)
+        for frag in integrity.fragment_files(target):
+            if Path(frag.stem).suffix == ".temp" or integrity.check_media(frag) is not None:
+                frag.unlink(missing_ok=True)
+                removed.append(frag.name)
+        for name in removed:
+            print(ui.yellow(f"removed corrupt leftover so it is re-downloaded: {name}"))
 
 
 # ---------------------------------------------------------------------------
