@@ -69,7 +69,8 @@ def kernel_errors(disk: str, *, since: str = "-7d") -> list[str] | None:
         return None
     try:
         result = subprocess.run(
-            ["journalctl", "-k", "--since", since, "--no-pager", "-q", "-o", "short"],
+            # Not -k: that implies --boot and hides errors from before a reboot.
+            ["journalctl", "_TRANSPORT=kernel", "--since", since, "--no-pager", "-q", "-o", "short"],
             capture_output=True,
             text=True,
             timeout=30,

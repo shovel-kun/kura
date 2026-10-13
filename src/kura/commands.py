@@ -1447,7 +1447,7 @@ def doctor_command(_args) -> int:
                 f"— the disk may be failing; latest: {errors[-1].strip()[:160]}"
             )
         else:
-            ok(f"{label}: no I/O errors in the kernel log (7 days)")
+            ok(f"{label}: no I/O errors in the kernel log (up to 7 days, as far as the journal reaches)")
         counters = disks.smart_counters(disk)
         if counters is None:
             continue
