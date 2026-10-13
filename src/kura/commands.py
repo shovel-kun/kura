@@ -16,7 +16,7 @@ from croniter import croniter
 from rich.console import Console
 from rich.live import Live
 
-from . import monitor, paths, state, ui
+from . import disks, monitor, paths, state, ui
 from .archive import (
     MEDIA_EXTENSIONS,
     append_archive_entries,
@@ -1428,6 +1428,35 @@ def doctor_command(_args) -> int:
                 warn(f"kura.timer {status} — scheduling not enabled (see README)")
         except Exception as exc:  # noqa: BLE001 — doctor reports any failure instead of crashing
             warn(f"could not query kura.timer: {exc}")
+
+    # 8. Health of the disks holding output_dirs.  A failing disk corrupts
+    # downloads silently long before SMART's overall verdict says FAILED.
+    disk_sources: dict[str, list[str]] = {}
+    for source in config.sources:
+        disk = disks.disk_for_path(source.output_dir)
+        if disk is not None:
+            disk_sources.setdefault(disk, []).append(source.name)
+    for disk, names in sorted(disk_sources.items()):
+        label = f"disk {disk} ({len(names)} source{'s' if len(names) != 1 else ''})"
+        errors = disks.kernel_errors(disk)
+        if errors is None:
+            warn(f"{label}: kernel log unreadable; cannot check for I/O errors")
+        elif errors:
+            fail(
+                f"{label}: {len(errors)} I/O error line(s) in the kernel log over the last 7 days "
+                f"— the disk may be failing; latest: {errors[-1].strip()[:160]}"
+            )
+        else:
+            ok(f"{label}: no I/O errors in the kernel log (7 days)")
+        counters = disks.smart_counters(disk)
+        if counters is None:
+            continue
+        bad = {i: v for i, v in counters.items() if v > 0}
+        if bad:
+            details = ", ".join(f"{v} {disks.SMART_WATCH[i]}" for i, v in bad.items())
+            warn(f"{label}: SMART reports {details}")
+        else:
+            ok(f"{label}: SMART counters clean")
 
     return 1 if has_fail else 0
 
