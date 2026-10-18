@@ -67,6 +67,16 @@ _MISSING_TAB = re.compile(
     re.IGNORECASE,
 )
 
+# Keyring errors from --cookies-from-browser.  yt-dlp logs these as ERROR but
+# carries on with whatever cookies it could decrypt, so they don't make the
+# run fail on their own.
+_NONFATAL_COOKIE_ERROR = re.compile(
+    r"ERROR:\s*(?:secretstorage not available"
+    r"|failed to read from keyring"
+    r"|kwallet-query (?:command not found|failed))",
+    re.IGNORECASE,
+)
+
 
 def missing_tabs(output_lines: list[str]) -> list[str] | None:
     """Return the tab names that were missing, when *that was the only problem*.
@@ -81,11 +91,12 @@ def missing_tabs(output_lines: list[str]) -> list[str] | None:
     ``ERROR:`` line in *output_lines* was a missing-tab error, so the caller may
     treat the run as successful.  Returns *None* when there were no missing-tab
     errors, or when some *other* error also occurred — a real failure must keep
-    its nonzero exit code even if a tab happened to be missing too.
+    its nonzero exit code even if a tab happened to be missing too.  Non-fatal
+    cookie keyring errors are skipped rather than counted as other errors.
     """
     tabs: list[str] = []
     for line in output_lines:
-        if not _ANY_ERROR.match(line):
+        if not _ANY_ERROR.match(line) or _NONFATAL_COOKIE_ERROR.search(line):
             continue
         m = _MISSING_TAB.search(line)
         if m is None:

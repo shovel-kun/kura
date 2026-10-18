@@ -424,6 +424,24 @@ def test_missing_tabs_none_when_another_error_present() -> None:
     assert missing_tabs(lines) is None
 
 
+def test_missing_tabs_skips_nonfatal_cookie_errors() -> None:
+    """A keyring failure only loses some cookies; yt-dlp still runs."""
+    lines = [
+        (
+            "ERROR: secretstorage not available as the `secretstorage` module is not installed. "
+            "Please install by running `python3 -m pip install secretstorage`\n"
+        ),
+        "ERROR: failed to read from keyring\n",
+        _NO_STREAMS + "\n",
+    ]
+    assert missing_tabs(lines) == ["streams"]
+
+
+def test_missing_tabs_none_when_only_cookie_errors() -> None:
+    """A cookie error alone is not a missing tab, so the exit code stands."""
+    assert missing_tabs(["ERROR: failed to read from keyring\n"]) is None
+
+
 def test_missing_tabs_ignores_non_error_mentions() -> None:
     """Only ERROR: lines are considered, so a title cannot spoof the check."""
     lines = ["[download] This channel does not have a streams tab.mp4\n"]
